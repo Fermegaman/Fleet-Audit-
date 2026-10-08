@@ -25,3 +25,10 @@ This foundation split preserves the existing Fleet Audit Hub prototype while sep
 - Active vehicles reported as grounded appear automatically in Grounded Vehicles. Use **View/Edit** to update Fleet Team details; Amazon status transitions record grounding and return dates without removing the vehicle's manual information or history.
 - Fleet tables can be sorted by each data column; Amazon-grounded rows are highlighted in light red.
 - Browser `localStorage` is a prototype persistence adapter; the client-ID-keyed state is intended to be replaceable by a shared database.
+
+## Element invoice audit
+
+- Element audits are scoped by client, audit month, and invoice number. Upload an Element CSV/CDV after entering the audit month and invoice number; source records and invoice charges stay with that audit.
+- Element CSV/CDV rows are the source for invoice records, VIN-level pivot totals, charge categories, maintenance review, the deliverable, and the printable client report. This workflow does not compare against or read Amazon fleet records.
+- Original Element maintenance charges remain unchanged. Completed maintenance reviews update only review amount, calculated difference, review status, and notes; unmatched VIN/charge rows remain visible under Unmatched Review Records.
+- The client report is generated in the browser and can be printed or saved as PDF.

@@ -1078,25 +1078,987 @@ function check(items) {
   return '<div class="check">' + items.map(item => '<label><input type="checkbox"> ' + item + '</label>').join('') + '</div>';
 }
 
-function element() {
-  setTitle('Element Invoice Audit', 'Upload the source files, then work through the SOP checklist.');
-  $('content').innerHTML = '<div class="grid2"><div class="panel"><h3>1. Source files</h3><div class="drop">Element PDF<br><input type="file" accept=".pdf"></div><br><div class="drop">Element CDV / CSV<br><input type="file" accept=".csv,.txt,.cdv"></div><div class="notice">The production build will read these files automatically. For now this screen is the workflow/checklist.</div></div><div class="panel"><h3>2. Audit checklist</h3>' +
-    check(['Invoice ready by the 1st', 'Fleet export uploaded', 'Element invoice data processed', 'VIN matched to fleet', 'Amazon Lease / Amazon owned identified', 'Charges summarized', 'VIN-level review completed', 'Client review sent by the 15th', 'Maintenance charges sent to Element and marked pending']) +
-    '</div></div><div class="panel" style="margin-top:14px"><h3>3. Audit record</h3>' +
-    form([['month', 'Invoice Month'], ['total', 'Invoice Total'], ['status', 'Status'], ['notes', 'Notes']], 'saveElement') + '</div>';
+function normalizeMaintenanceReviewStatus(value) {
+  const normalized = String(value == null ? '' : value).trim();
+  if (!normalized) return 'Pending Review';
+  const map = {
+    'pending review': 'Pending Review',
+    'pending': 'Pending Review',
+    'reviewed': 'Reviewed',
+    'approved': 'Approved',
+    'disputed': 'Disputed'
+  };
+  const key = normalized.toLowerCase();
+  return map[key] || normalized;
 }
 
-function saveElement() {
-  state.elementAudits.push({
-    clientId: currentClientId,
-    month: $('f_month').value,
-    total: $('f_total').value,
-    status: $('f_status').value,
-    notes: $('f_notes').value
+function parseNumeric(value) {
+  if (value == null || value === '') return 0;
+  const cleaned = String(value).replace(/[$,\s]/g, '').replace(/\((.*)\)/, '-$1');
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatMoney(value) {
+  const amount = typeof value === 'number' ? value : parseNumeric(value);
+  return '$' + amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function maintenanceReviewSummary(audit) {
+  const rows = audit ? ensureMaintenanceReviewFromElement(audit) :
+    (Array.isArray(audit && audit.maintenanceReview) ? audit.maintenanceReview : []);
+  const totalCharges = rows.reduce((total, row) => total + parseNumeric(row.elementCharge), 0);
+  const pendingRows = rows.filter(row =>
+    normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Pending Review' || row.reviewedAmount === ''
+  );
+  const pending = pendingRows
+    .reduce((total, row) => total + parseNumeric(row.elementCharge), 0);
+  const reviewedRows = rows.filter(row =>
+    normalizeMaintenanceReviewStatus(row.reviewStatus) !== 'Pending Review' && row.reviewedAmount !== ''
+  );
+  const reviewed = reviewedRows.reduce((total, row) => total + parseNumeric(row.reviewedAmount), 0);
+  const approved = reviewedRows.filter(row => normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Approved')
+    .reduce((total, row) => total + parseNumeric(row.reviewedAmount), 0);
+  const disputed = reviewedRows.filter(row => normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Disputed')
+    .reduce((total, row) => total + parseNumeric(row.reviewedAmount), 0);
+  const totalDifference = reviewedRows.reduce((total, row) =>
+    total + parseNumeric(row.reviewedAmount) - parseNumeric(row.elementCharge), 0);
+  return {
+    totalCharges,
+    pending,
+    reviewed,
+    approved,
+    disputed,
+    totalDifference
+  };
+}
+
+function ensureAuditMaintenanceReview(audit) {
+  if (!audit) return [];
+  audit.maintenanceReview = Array.isArray(audit.maintenanceReview) ? audit.maintenanceReview : [];
+  audit.unmatchedReviewRecords = Array.isArray(audit.unmatchedReviewRecords) ? audit.unmatchedReviewRecords : [];
+  audit.maintenanceReview.forEach(row => {
+    row.vin = normalizeVin(row.vin || row.VIN || row['VIN #']);
+    row.unit = row.unit || row.Unit || '';
+    row.clientAssetId = row.clientAssetId || row['Client Asset ID'] || row.clientAssetID || '';
+    row.maintenanceDescription = row.maintenanceDescription || row['Maintenance Description'] || row.description || '';
+    row.elementCharge = row.elementCharge == null ? (row['Element Charge'] || '') : row.elementCharge;
+    row.reviewedAmount = row.reviewedAmount == null ? (row['Reviewed Amount'] || '') : row.reviewedAmount;
+    row.difference = row.difference == null ? (row['Difference'] || '') : row.difference;
+    row.reviewStatus = normalizeMaintenanceReviewStatus(row.reviewStatus || row['Review Status']);
+    row.reviewNotes = row.reviewNotes == null ? (row['Review Notes'] || '') : row.reviewNotes;
+    if (row.reviewedAmount !== '' &&
+        (row.difference === '' || row.difference == null)) {
+      row.difference = String(parseNumeric(row.reviewedAmount) - parseNumeric(row.elementCharge));
+    }
   });
+  return audit.maintenanceReview;
+}
+
+function elementAuditList() {
+  return state.elementAudits.filter(audit => audit.clientId === currentClientId);
+}
+
+function currentElementAudit() {
+  const audits = elementAuditList();
+  const selectedId = state.selectedElementAuditByClient &&
+    state.selectedElementAuditByClient[currentClientId];
+  return audits.find(audit => audit.id === selectedId) || audits[audits.length - 1] || null;
+}
+
+function normalizedElementKey(value) {
+  return String(value == null ? '' : value).trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function elementAuditKey(clientId, month, invoiceNumber) {
+  return [clientId, normalizedElementKey(month), normalizedElementKey(invoiceNumber)].join('|');
+}
+
+function sourceValue(source, candidates) {
+  const candidateKeys = candidates.map(normalizedElementKey);
+  const entry = Object.entries(source || {}).find(([key]) =>
+    candidateKeys.includes(normalizedElementKey(key))
+  );
+  return entry ? entry[1] : '';
+}
+
+function csvRows(text) {
+  const allLines = String(text || '').split(/\r?\n/).filter(line => line.trim());
+  const headerLine = allLines.find(line => /vin/i.test(line) &&
+    /charge|amount|cost|description|breakdown|ticket|toll|maintenance|lease/i.test(line));
+  const sampleLines = headerLine ? [headerLine] : allLines.slice(0, 12);
+  const delimiters = [',', '\t', ';'];
+  const delimiter = delimiters.map(candidate => {
+    const count = sampleLines.map(line => {
+      let quoted = false;
+      let lineCount = 0;
+      for (let index = 0; index < line.length; index++) {
+        if (line[index] === '"') {
+          if (quoted && line[index + 1] === '"') index++;
+          else quoted = !quoted;
+        } else if (line[index] === candidate && !quoted) lineCount++;
+      }
+      return lineCount;
+    }).sort((left, right) => right - left)[0] || 0;
+    return { delimiter: candidate, count };
+  }).sort((left, right) => right.count - left.count)[0].delimiter;
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let quoted = false;
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index];
+    if (character === '"') {
+      if (quoted && text[index + 1] === '"') {
+        cell += '"';
+        index++;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character === delimiter && !quoted) {
+      row.push(cell);
+      cell = '';
+    } else if ((character === '\n' || character === '\r') && !quoted) {
+      if (character === '\r' && text[index + 1] === '\n') index++;
+      row.push(cell);
+      if (row.some(value => String(value).trim())) rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += character;
+    }
+  }
+  if (cell.length || row.length) {
+    row.push(cell);
+    if (row.some(value => String(value).trim())) rows.push(row);
+  }
+  return rows;
+}
+
+function elementRecordsFromText(text) {
+  const rows = csvRows(text);
+  const headerIndex = rows.findIndex(row => {
+    const keys = row.map(normalizedElementKey);
+    return keys.some(key => key === 'vin' || key === 'vinnumber' || key === 'vinno') &&
+      keys.some(key => /charge|amount|cost|description|breakdown|ticket|toll|maintenance|lease/.test(key));
+  });
+  if (headerIndex < 0) {
+    throw new Error('Could not find an Element invoice header row containing VIN and charge fields.');
+  }
+  const headers = rows[headerIndex].map((header, index) => {
+    const value = String(header || '').trim();
+    return value || 'Column ' + (index + 1);
+  });
+  return rows.slice(headerIndex + 1).map(values => {
+    const source = {};
+    headers.forEach((header, index) => {
+      source[header] = values[index] == null ? '' : values[index];
+    });
+    return source;
+  }).filter(source => Object.values(source).some(value => String(value).trim()));
+}
+
+function elementRecordValues(source) {
+  const vin = normalizeVin(sourceValue(source, ['VIN', 'VIN #', 'VIN Number', 'VIN No']));
+  const unit = sourceValue(source, ['Unit', 'Unit Number', 'Vehicle Number']);
+  const clientAssetId = sourceValue(source, ['Client Asset ID', 'Client Asset ID #', 'Asset ID']);
+  const description = sourceValue(source, [
+    'Breakdown / Description', 'Breakdown Description', 'Maintenance Description',
+    'Description', 'Breakdown', 'Charge Description'
+  ]);
+  const totalValue = sourceValue(source, ['Total Unit Charges', 'Total Charges', 'Unit Total']);
+  const categories = {
+    lease: 0,
+    maintenance: 0,
+    ticket: 0,
+    uncategorized: 0,
+    credits: 0,
+    taxRental: 0,
+    other: 0
+  };
+  let foundCategoryAmount = false;
+  let foundGenericAmount = false;
+  let genericAmount = 0;
+  Object.entries(source || {}).forEach(([header, rawValue]) => {
+    const key = normalizedElementKey(header);
+    const value = parseNumeric(rawValue);
+    if (!key || !value || /^(vin|unit|unitnumber|clientassetid|assetid|year|date|invoicenumber|invoice|ticketnumber)$/.test(key)) {
+      return;
+    }
+    if (/^(totalunitcharges|totalcharges|unittotal|invoicetotal)$/.test(key)) return;
+    let category = '';
+    if (/taxrental|rentaltax/.test(key)) category = 'taxRental';
+    else if (/(lease|rental)/.test(key) && /(charge|amount|cost|fee|lease|rental)/.test(key)) category = 'lease';
+    else if (/(maintenance|repair)/.test(key) && /(charge|amount|cost|fee|maintenance|repair)/.test(key)) category = 'maintenance';
+    else if (/(ticket|toll)/.test(key) && !/(number|id|reference)/.test(key)) category = 'ticket';
+    else if (/(uncategorized|notcategorized)/.test(key)) category = 'uncategorized';
+    else if (/credit/.test(key)) category = 'credits';
+    else if (/(misc|adjustment|surcharge)/.test(key)) category = 'other';
+    else if (/other/.test(key) && /(charge|amount|cost|fee|other)/.test(key)) category = 'other';
+
+    if (category) {
+      categories[category] += value;
+      foundCategoryAmount = true;
+      return;
+    }
+    if (/(amount|charge|cost|fee|tax|toll|ticket|credit)/.test(key)) {
+      genericAmount += value;
+      foundGenericAmount = true;
+    }
+  });
+
+  const total = parseNumeric(totalValue);
+  if (!foundCategoryAmount && foundGenericAmount) {
+    const label = [
+      sourceValue(source, ['Charge Category', 'Category', 'Charge Type', 'Breakdown / Description', 'Description']),
+      description
+    ].filter(Boolean).join(' ').toLowerCase();
+    const category = /maint|repair|service|parts|labor/.test(label) ? 'maintenance' :
+      /ticket|toll/.test(label) ? 'ticket' :
+      /lease|rental/.test(label) ? 'lease' :
+      /credit/.test(label) ? 'credits' :
+      /tax/.test(label) ? 'taxRental' : 'uncategorized';
+    categories[category] += genericAmount;
+  } else if (foundCategoryAmount && foundGenericAmount) {
+    categories.other += genericAmount;
+  }
+  if (!foundCategoryAmount && !foundGenericAmount && total) {
+    const label = [
+      sourceValue(source, ['Charge Category', 'Category', 'Charge Type', 'Breakdown / Description', 'Description']),
+      description
+    ].filter(Boolean).join(' ');
+    const category = /maint|repair|service|parts|labor/.test(label.toLowerCase()) ? 'maintenance' :
+      /ticket|toll/.test(label.toLowerCase()) ? 'ticket' :
+      /lease|rental/.test(label.toLowerCase()) ? 'lease' :
+      /credit/.test(label.toLowerCase()) ? 'credits' :
+      /tax/.test(label.toLowerCase()) ? 'taxRental' : 'uncategorized';
+    categories[category] += total;
+  }
+
+  const categoryTotal = Object.values(categories).reduce((sum, value) => sum + value, 0);
+  if (total && (foundCategoryAmount || foundGenericAmount) && Math.abs(total - categoryTotal) >= 0.01) {
+    categories.other += total - categoryTotal;
+  }
+  const calculatedTotal = total || Object.values(categories).reduce((sum, value) => sum + value, 0);
+  return {
+    vin,
+    unit: String(unit || ''),
+    clientAssetId: String(clientAssetId || ''),
+    description: String(description || ''),
+    total: calculatedTotal,
+    categories,
+    source
+  };
+}
+
+function elementAuditRecords(audit) {
+  return Array.isArray(audit && audit.elementRecords) ? audit.elementRecords : [];
+}
+
+function elementSummary(audit) {
+  return elementAuditRecords(audit).reduce((summary, record) => {
+    Object.keys(summary).forEach(key => { summary[key] += record.categories[key] || 0; });
+    summary.total += record.total || 0;
+    return summary;
+  }, { lease: 0, maintenance: 0, ticket: 0, uncategorized: 0, credits: 0, taxRental: 0, other: 0, total: 0 });
+}
+
+function elementSourceInvoiceTotal(audit) {
+  if (audit && audit.sourceInvoiceTotal != null && audit.sourceInvoiceTotal !== '') {
+    return parseNumeric(audit.sourceInvoiceTotal);
+  }
+  const explicitTotals = elementAuditRecords(audit).map(record =>
+    parseNumeric(sourceValue(record.source, ['Invoice Total', 'Invoice Total Amount', 'Grand Total']))
+  ).filter(value => value !== 0);
+  if (explicitTotals.length) return explicitTotals[0];
+  return elementAuditRecords(audit).reduce((total, record) => total + (record.total || 0), 0);
+}
+
+function elementPivot(audit) {
+  const groups = new Map();
+  elementAuditRecords(audit).forEach(record => {
+    const vin = record.vin || '(No VIN)';
+    const row = groups.get(vin) || {
+      vin, lease: 0, maintenance: 0, ticket: 0, uncategorized: 0, credits: 0,
+      taxRental: 0, other: 0, total: 0
+    };
+    Object.keys(record.categories).forEach(key => { row[key] += record.categories[key] || 0; });
+    row.total += record.total || 0;
+    groups.set(vin, row);
+  });
+  return Array.from(groups.values()).sort((left, right) => left.vin.localeCompare(right.vin));
+}
+
+function elementChargeItems(audit, category) {
+  return elementAuditRecords(audit).filter(record => Math.abs(record.categories[category] || 0) >= 0.005)
+    .map(record => ({
+      vin: record.vin,
+      description: record.description || record.source['Maintenance Description'] ||
+        record.source['Ticket Description'] || record.source['Breakdown'] || '',
+      cost: record.categories[category]
+    }));
+}
+
+function ensureMaintenanceReviewFromElement(audit) {
+  if (!audit) return [];
+  const priorRows = Array.isArray(audit.maintenanceReview) ? audit.maintenanceReview : [];
+  const queues = new Map();
+  priorRows.forEach(row => {
+    const key = [normalizeVin(row.vin), normalizedElementKey(row.maintenanceDescription), parseNumeric(row.elementCharge)].join('|');
+    const queue = queues.get(key) || [];
+    queue.push(row);
+    queues.set(key, queue);
+  });
+  audit.maintenanceReview = [];
+  elementAuditRecords(audit).forEach(record => {
+    const charge = record.categories.maintenance || 0;
+    if (Math.abs(charge) < 0.005) return;
+    const description = record.source['Maintenance Description'] || record.description || '';
+    const key = [record.vin, normalizedElementKey(description), charge].join('|');
+    const previous = queues.get(key);
+    const row = previous && previous.length ? previous.shift() : null;
+    audit.maintenanceReview.push(row || {
+      vin: record.vin,
+      unit: record.unit,
+      clientAssetId: record.clientAssetId,
+      maintenanceDescription: description,
+      elementCharge: charge,
+      reviewedAmount: '',
+      difference: '',
+      reviewStatus: 'Pending Review',
+      reviewNotes: ''
+    });
+  });
+  return ensureAuditMaintenanceReview(audit);
+}
+
+function sortedElementRecords(audit, tableName, records) {
+  const sorts = state.elementAuditSort || (state.elementAuditSort = {});
+  const sort = sorts[tableName] || { key: 'vin', direction: 'asc' };
+  return records.slice().sort((left, right) => {
+    const a = tableName === 'source' && left.categories
+      ? (left.categories[sort.key] == null ? left[sort.key] : left.categories[sort.key])
+      : left[sort.key];
+    const b = tableName === 'source' && right.categories
+      ? (right.categories[sort.key] == null ? right[sort.key] : right.categories[sort.key])
+      : right[sort.key];
+    const result = typeof a === 'number' && typeof b === 'number'
+      ? a - b
+      : String(a == null ? '' : a).localeCompare(String(b == null ? '' : b), undefined, { numeric: true, sensitivity: 'base' });
+    return sort.direction === 'desc' ? -result : result;
+  });
+}
+
+function elementTableHead(columns, tableName) {
+  const sort = state.elementAuditSort && state.elementAuditSort[tableName] || { key: 'vin', direction: 'asc' };
+  return '<thead><tr>' + columns.map(([key, label]) => key === 'detail'
+    ? '<th>' + esc(label) + '</th>'
+    : '<th><button type="button" class="sort-header" data-element-sort="' + tableName + ':' + key + '" aria-sort="' +
+      (sort.key === key ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none') + '">' +
+      esc(label) + (sort.key === key ? (sort.direction === 'asc' ? ' ▲' : ' ▼') : '') + '</button></th>'
+  ).join('') + '</tr></thead>';
+}
+
+function elementInvoiceTableHtml(audit) {
+  const columns = [
+    ['vin', 'VIN'], ['unit', 'Unit'], ['clientAssetId', 'Client Asset ID'], ['description', 'Breakdown / Description'],
+    ['total', 'Total Unit Charges'], ['lease', 'Lease Charges'], ['maintenance', 'Maintenance Charges'],
+    ['ticket', 'Ticket'], ['taxRental', 'Tax Rental'], ['uncategorized', 'Charges Not Categorized'],
+    ['credits', 'Credits'], ['other', 'Other'], ['detail', 'Source Record']
+  ];
+  const records = sortedElementRecords(audit, 'source', elementAuditRecords(audit));
+  if (!records.length) return '<p class="muted">Upload an Element CSV/CDV to view invoice records.</p>';
+  return '<div class="table"><table>' + elementTableHead(columns, 'source') + '<tbody>' +
+    records.map((record, index) => {
+      const values = [record.vin, record.unit, record.clientAssetId, record.description, formatMoney(record.total),
+        formatMoney(record.categories.lease), formatMoney(record.categories.maintenance), formatMoney(record.categories.ticket),
+        formatMoney(record.categories.taxRental), formatMoney(record.categories.uncategorized),
+        formatMoney(record.categories.credits), formatMoney(record.categories.other)];
+      return '<tr class="element-source-row" data-source-index="' + index + '" data-filter-text="' + esc(values.join(' ').toLowerCase()) + '">' +
+        values.map(value => '<td>' + esc(value) + '</td>').join('') +
+        '<td><button type="button" class="btn secondary" data-source-detail="' + index + '">View source</button></td></tr>' +
+        '<tr class="element-source-detail" data-source-detail-row="' + index + '" data-expanded="false" hidden><td colspan="' + columns.length +
+        '"><pre style="white-space:pre-wrap;margin:0">' + esc(JSON.stringify(record.source, null, 2)) + '</pre></td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
+function elementPivotTableHtml(audit) {
+  const columns = [
+    ['vin', 'VIN'], ['ticket', 'Ticket / Toll'], ['lease', 'Lease Charges'], ['maintenance', 'Maintenance Charges'],
+    ['uncategorized', 'Uncategorized Charges'], ['credits', 'Credits'], ['taxRental', 'Tax Rental'],
+    ['other', 'Other Charges'], ['total', 'Total Charges']
+  ];
+  const rows = sortedElementRecords(audit, 'pivot', elementPivot(audit));
+  if (!rows.length) return '<p class="muted">No Element VIN totals are available.</p>';
+  const totals = elementSummary(audit);
+  return '<div class="table"><table>' + elementTableHead(columns, 'pivot') + '<tbody>' +
+    rows.map(row => {
+      const values = [row.vin, row.ticket, row.lease, row.maintenance, row.uncategorized, row.credits, row.taxRental, row.other, row.total];
+      return '<tr class="element-pivot-row" data-filter-text="' + esc(values.join(' ').toLowerCase()) + '">' +
+        '<td>' + esc(row.vin) + '</td>' + values.slice(1).map(value => '<td>' + esc(formatMoney(value)) + '</td>').join('') + '</tr>';
+    }).join('') +
+    '<tr><th>TOTAL</th>' + [totals.ticket, totals.lease, totals.maintenance, totals.uncategorized, totals.credits, totals.taxRental, totals.other, totals.total]
+      .map(value => '<th>' + esc(formatMoney(value)) + '</th>').join('') + '</tr>' +
+    '</tbody></table></div>';
+}
+
+function maintenanceReviewTableHtml(audit) {
+  const rows = ensureMaintenanceReviewFromElement(audit);
+  if (!rows.length) {
+    return '<p class="muted">No maintenance charges were identified in the Element invoice data.</p>';
+  }
+  return '<div class="table"><table><thead><tr>' +
+    '<th>VIN</th><th>Unit</th><th>Client Asset ID</th><th>Maintenance Description</th><th>Element Charge</th>' +
+    '<th>Reviewed Amount</th><th>Difference</th><th>Review Status</th><th>Review Notes</th></tr></thead><tbody>' +
+    rows.map((row, index) => {
+      const reviewStatus = normalizeMaintenanceReviewStatus(row.reviewStatus);
+      const elementCharge = row.elementCharge == null || row.elementCharge === '' ? '' : formatMoney(row.elementCharge);
+      const reviewedAmount = row.reviewedAmount == null || row.reviewedAmount === '' ? '' : formatMoney(row.reviewedAmount);
+      const difference = row.difference == null || row.difference === '' ? '' : formatMoney(row.difference);
+      return '<tr>' +
+        '<td>' + esc(row.vin || '') + '</td>' +
+        '<td>' + esc(row.unit || '') + '</td>' +
+        '<td>' + esc(row.clientAssetId || '') + '</td>' +
+        '<td>' + esc(row.maintenanceDescription || '') + '</td>' +
+        '<td>' + esc(elementCharge) + '</td>' +
+        '<td><input type="number" step="0.01" data-maintenance-review-field="reviewedAmount" data-index="' + index + '" value="' + esc(row.reviewedAmount || '') + '"></td>' +
+        '<td>' + esc(difference) + '</td>' +
+        '<td><select data-maintenance-review-field="reviewStatus" data-index="' + index + '">' +
+          ['Pending Review', 'Reviewed', 'Approved', 'Disputed'].map(status =>
+            '<option value="' + esc(status) + '"' + (status === reviewStatus ? ' selected' : '') + '>' + esc(status) + '</option>'
+          ).join('') +
+        '</select></td>' +
+        '<td><textarea data-maintenance-review-field="reviewNotes" data-index="' + index + '" rows="2">' + esc(row.reviewNotes || '') + '</textarea></td>' +
+        '</tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
+function exportMaintenanceReviewWorkbook() {
+  if (typeof XLSX === 'undefined') {
+    throw new Error('The Excel export library is unavailable.');
+  }
+  const audit = currentElementAudit();
+  if (!audit) {
+    alert('Upload Element invoice data before exporting maintenance review.');
+    return;
+  }
+  const rows = ensureMaintenanceReviewFromElement(audit).map(row => ({
+    VIN: row.vin || '',
+    Unit: row.unit || '',
+    'Client Asset ID': row.clientAssetId || '',
+    'Maintenance Description': row.maintenanceDescription || '',
+    'Element Charge': row.elementCharge,
+    'Reviewed Amount': '',
+    Difference: '',
+    'Review Status': 'Pending Review',
+    'Review Notes': ''
+  }));
+  const headers = ['VIN', 'Unit', 'Client Asset ID', 'Maintenance Description', 'Element Charge', 'Reviewed Amount', 'Difference', 'Review Status', 'Review Notes'];
+  const worksheet = XLSX.utils.json_to_sheet(rows, { header: headers });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Maintenance Review');
+  const fileMonth = String(audit.month || 'Element').replace(/[^a-z0-9_-]+/gi, '-');
+  XLSX.writeFile(workbook, fileMonth + '-maintenance-review.xlsx');
+}
+
+function matchMaintenanceReviewRecords(rows) {
+  const audit = currentElementAudit();
+  if (!audit) return [];
+  const reviewRows = ensureMaintenanceReviewFromElement(audit);
+  const consumed = new Set();
+  const unmatched = [];
+  rows.forEach(row => {
+    const vin = normalizeVin(row.vin || row.VIN || row['VIN #']);
+    const description = row.maintenanceDescription || row['Maintenance Description'] || row.description || '';
+    const elementCharge = row.elementCharge == null ? row['Element Charge'] : row.elementCharge;
+    if (!vin) {
+      unmatched.push({
+        vin: '',
+        unit: row.unit || row.Unit || '',
+        clientAssetId: row.clientAssetId || row['Client Asset ID'] || '',
+        maintenanceDescription: description,
+        elementCharge: elementCharge || '',
+        reviewedAmount: row.reviewedAmount || row['Reviewed Amount'] || '',
+        difference: row.difference || row['Difference'] || '',
+        reviewStatus: normalizeMaintenanceReviewStatus(row.reviewStatus || row['Review Status'] || 'Pending Review'),
+        reviewNotes: row.reviewNotes || row['Review Notes'] || ''
+      });
+      return;
+    }
+    const candidates = reviewRows.map((candidate, index) => ({ candidate, index }))
+      .filter(item => normalizeVin(item.candidate.vin) === vin && !consumed.has(item.index));
+    const exact = candidates.find(item =>
+      normalizedElementKey(item.candidate.maintenanceDescription) === normalizedElementKey(description) &&
+      (elementCharge == null || elementCharge === '' ||
+        Math.abs(parseNumeric(item.candidate.elementCharge) - parseNumeric(elementCharge)) < 0.01)
+    );
+    const targetMatch = exact || (candidates.length === 1 ? candidates[0] : null);
+    const target = targetMatch && targetMatch.candidate;
+    if (!target) {
+      unmatched.push({
+        vin,
+        unit: row.unit || row.Unit || '',
+        clientAssetId: row.clientAssetId || row['Client Asset ID'] || '',
+        maintenanceDescription: description,
+        elementCharge: elementCharge || '',
+        reviewedAmount: row.reviewedAmount || row['Reviewed Amount'] || '',
+        difference: row.difference || row['Difference'] || '',
+        reviewStatus: normalizeMaintenanceReviewStatus(row.reviewStatus || row['Review Status'] || 'Pending Review'),
+        reviewNotes: row.reviewNotes || row['Review Notes'] || ''
+      });
+      return;
+    }
+    consumed.add(targetMatch.index);
+    const reviewedAmount = row.reviewedAmount == null ? row['Reviewed Amount'] : row.reviewedAmount;
+    if (reviewedAmount != null && reviewedAmount !== '') {
+      target.reviewedAmount = reviewedAmount;
+      target.difference = String(parseNumeric(reviewedAmount) - parseNumeric(target.elementCharge));
+    }
+    const status = row.reviewStatus || row['Review Status'];
+    if (status) target.reviewStatus = normalizeMaintenanceReviewStatus(status);
+    const notes = row.reviewNotes == null ? row['Review Notes'] : row.reviewNotes;
+    if (notes != null) target.reviewNotes = notes;
+  });
+  audit.unmatchedReviewRecords = (audit.unmatchedReviewRecords || []).concat(unmatched);
   save();
-  alert('Element audit saved.');
-  go('dashboard');
+  return unmatched;
+}
+
+function parseMaintenanceReviewFile(file) {
+  if (!file) return;
+  const extension = String(file.name || '').split('.').pop().toLowerCase();
+  if (!['csv', 'xlsx', 'xls'].includes(extension)) {
+    alert('Choose a .csv, .xlsx, or .xls file for the completed maintenance review.');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = event => {
+    try {
+      let rows;
+      if (extension === 'csv') {
+        const parsed = csvRows(String(event.target.result || ''));
+        if (!parsed.length) return;
+        const headers = parsed[0].map(value => String(value || '').trim());
+        rows = parsed.slice(1).map(parsedRow => {
+          const object = {};
+          headers.forEach((header, headerIndex) => {
+            object[header] = parsedRow[headerIndex] == null ? '' : parsedRow[headerIndex];
+          });
+          return object;
+        });
+      } else {
+        const workbook = XLSX.read(event.target.result, { type: 'array' });
+        const firstSheetName = workbook.SheetNames.find(sheetName => {
+          const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, blankrows: false, defval: '' });
+          const text = sheet.flat().join(' ').toLowerCase();
+          return /vin|maintenance|element charge|reviewed amount|review status/.test(text);
+        }) || workbook.SheetNames[0];
+        rows = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheetName], { defval: '' });
+      }
+      const normalizedRows = rows.map(row => ({
+        vin: sourceValue(row, ['VIN', 'VIN #', 'VIN Number']),
+        unit: sourceValue(row, ['Unit']),
+        clientAssetId: sourceValue(row, ['Client Asset ID']),
+        maintenanceDescription: sourceValue(row, ['Maintenance Description', 'Description']),
+        elementCharge: sourceValue(row, ['Element Charge']),
+        reviewedAmount: sourceValue(row, ['Reviewed Amount']),
+        difference: sourceValue(row, ['Difference']),
+        reviewStatus: sourceValue(row, ['Review Status']),
+        reviewNotes: sourceValue(row, ['Review Notes'])
+      })).filter(record => Object.values(record).some(value => String(value == null ? '' : value).trim()));
+      if (!normalizedRows.length) {
+        throw new Error('No review records with matching headers were found.');
+      }
+      const unmatched = matchMaintenanceReviewRecords(normalizedRows);
+      if (unmatched && unmatched.length) {
+        alert('Some maintenance review records did not match a maintenance charge in this Element audit and were saved under Unmatched Review Records.');
+      } else {
+        alert('Maintenance review upload completed for this Element audit.');
+      }
+      element();
+    } catch (error) {
+      console.error(error);
+      alert('Unable to parse the completed maintenance review file.');
+    }
+  };
+  if (extension === 'csv') reader.readAsText(file);
+  else reader.readAsArrayBuffer(file);
+}
+
+function parseElementInvoiceFile(file) {
+  if (!file) return;
+  const extension = String(file.name || '').split('.').pop().toLowerCase();
+  if (!['csv', 'txt', 'cdv'].includes(extension)) {
+    alert('Choose an Element .csv, .txt, or .cdv file.');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = event => {
+    try {
+      const sourceRows = elementRecordsFromText(String(event.target.result || ''));
+      if (!sourceRows.length) throw new Error('The Element file has headers but no invoice records.');
+      const month = $('elementAuditMonth').value.trim();
+      const invoiceNumber = $('elementInvoiceNumber').value.trim();
+      if (!month || !invoiceNumber) {
+        alert('Enter the Audit Month and Invoice Number before uploading Element invoice data.');
+        return;
+      }
+      const clientId = currentClientId;
+      const key = elementAuditKey(clientId, month, invoiceNumber);
+      let audit = elementAuditList().find(item =>
+        elementAuditKey(item.clientId, item.month, item.invoiceNumber) === key
+      );
+      if (!audit) {
+        audit = {
+          id: 'element-audit-' + Date.now(),
+          clientId,
+          month,
+          invoiceNumber,
+          invoiceDate: '',
+          sourceInvoiceTotal: '',
+          elementRecords: [],
+          maintenanceReview: [],
+          unmatchedReviewRecords: []
+        };
+        state.elementAudits.push(audit);
+      }
+      audit.month = month;
+      audit.invoiceNumber = invoiceNumber;
+      audit.invoiceDate = $('elementInvoiceDate').value;
+      audit.elementRecords = sourceRows.map(elementRecordValues);
+      const importedTotal = sourceValue(sourceRows[0], ['Invoice Total', 'Invoice Total Amount', 'Grand Total']);
+      audit.sourceInvoiceTotal = $('elementInvoiceTotal').value || importedTotal || '';
+      state.selectedElementAuditByClient = state.selectedElementAuditByClient || {};
+      state.selectedElementAuditByClient[clientId] = audit.id;
+      ensureMaintenanceReviewFromElement(audit);
+      save();
+      alert('Imported ' + audit.elementRecords.length + ' Element invoice records for ' + month + ' / ' + invoiceNumber + '.');
+      element();
+    } catch (error) {
+      console.error('Unable to parse Element invoice file.', error);
+      alert('Unable to parse the Element invoice file: ' + error.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function attachElementInvoicePdf(file) {
+  if (!file) return;
+  if (!/\.pdf$/i.test(file.name || '')) {
+    alert('Choose the Element invoice PDF.');
+    return;
+  }
+  const audit = currentElementAudit();
+  if (!audit) {
+    alert('Save the audit month and invoice number before attaching the Element PDF.');
+    return;
+  }
+  audit.invoicePdfName = file.name;
+  audit.invoicePdfSize = file.size;
+  save();
+  element();
+}
+
+function saveElementAuditDetails() {
+  const month = $('elementAuditMonth').value.trim();
+  const invoiceNumber = $('elementInvoiceNumber').value.trim();
+  if (!month || !invoiceNumber) {
+    alert('Enter both the Audit Month and Invoice Number.');
+    return;
+  }
+  let audit = currentElementAudit();
+  const key = elementAuditKey(currentClientId, month, invoiceNumber);
+  const matching = elementAuditList().find(item =>
+    elementAuditKey(item.clientId, item.month, item.invoiceNumber) === key
+  );
+  audit = matching || audit;
+  if (!audit || (audit.month && audit.invoiceNumber &&
+      elementAuditKey(audit.clientId, audit.month, audit.invoiceNumber) !== key)) {
+    audit = {
+      id: 'element-audit-' + Date.now(),
+      clientId: currentClientId,
+      month,
+      invoiceNumber,
+      invoiceDate: '',
+      sourceInvoiceTotal: '',
+      elementRecords: [],
+      maintenanceReview: [],
+      unmatchedReviewRecords: []
+    };
+    state.elementAudits.push(audit);
+  }
+  audit.month = month;
+  audit.invoiceNumber = invoiceNumber;
+  audit.invoiceDate = $('elementInvoiceDate').value;
+  audit.sourceInvoiceTotal = $('elementInvoiceTotal').value;
+  state.selectedElementAuditByClient = state.selectedElementAuditByClient || {};
+  state.selectedElementAuditByClient[currentClientId] = audit.id;
+  save();
+  element();
+}
+
+function changeElementAudit(auditId) {
+  state.selectedElementAuditByClient = state.selectedElementAuditByClient || {};
+  state.selectedElementAuditByClient[currentClientId] = auditId;
+  save();
+  element();
+}
+
+function setElementTableSort(value) {
+  const [tableName, key] = value.split(':');
+  state.elementAuditSort = state.elementAuditSort || {};
+  const previous = state.elementAuditSort[tableName];
+  state.elementAuditSort[tableName] = {
+    key,
+    direction: previous && previous.key === key && previous.direction === 'asc' ? 'desc' : 'asc'
+  };
+  element();
+}
+
+function filterElementRows(input, selector) {
+  const query = input.value.trim().toLowerCase();
+  document.querySelectorAll(selector).forEach(row => {
+    row.hidden = !String(row.dataset.filterText || '').includes(query);
+    if (row.classList.contains('element-source-row')) {
+      const detail = document.querySelector('[data-source-detail-row="' + row.dataset.sourceIndex + '"]');
+      if (detail) detail.hidden = row.hidden || !detail.dataset.expanded;
+    }
+  });
+}
+
+function deliverableCategoryHtml(audit, category, title) {
+  const items = elementChargeItems(audit, category);
+  if (!items.length) return '';
+  const total = items.reduce((sum, item) => sum + item.cost, 0);
+  return '<h4>' + esc(title) + '</h4><div class="table"><table><thead><tr><th>VIN</th><th>Description</th><th>Cost</th></tr></thead><tbody>' +
+    items.map(item => '<tr><td>' + esc(item.vin) + '</td><td>' + esc(item.description) + '</td><td>' + esc(formatMoney(item.cost)) + '</td></tr>').join('') +
+    '<tr><th colspan="2">TOTAL</th><th>' + esc(formatMoney(total)) + '</th></tr></tbody></table></div>';
+}
+
+function maintenanceDeliverableSummary(audit) {
+  const rows = ensureMaintenanceReviewFromElement(audit);
+  const summary = maintenanceReviewSummary(audit);
+  return {
+    billed: summary.totalCharges,
+    reviewedApproved: summary.approved,
+    pending: summary.pending,
+    difference: summary.totalDifference,
+    pendingStatus: rows.some(row => normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Pending Review' || row.reviewedAmount === '')
+  };
+}
+
+function deliverableHtml(audit) {
+  if (!audit) return '<p class="muted">Upload Element data to build the client deliverable.</p>';
+  const totals = elementSummary(audit);
+  const review = maintenanceDeliverableSummary(audit);
+  const categoryCards = [
+    ['Lease Charges', totals.lease], ['Maintenance Charges', totals.maintenance],
+    ['Uncategorized Charges', totals.uncategorized], ['Ticket / Toll', totals.ticket],
+    ['Credits', totals.credits], ['Tax Rental', totals.taxRental], ['Other Charges', totals.other],
+    ['TOTAL', totals.total]
+  ];
+  return '<div class="cards">' + categoryCards.map(([label, value]) =>
+    '<div class="card"><div class="muted">' + esc(label) + '</div><div class="num">' + esc(formatMoney(value)) + '</div></div>'
+  ).join('') + '</div>' +
+    deliverableCategoryHtml(audit, 'maintenance', 'Maintenance Charges') +
+    deliverableCategoryHtml(audit, 'ticket', 'Ticket / Toll') +
+    deliverableCategoryHtml(audit, 'uncategorized', 'Uncategorized Charges') +
+    deliverableCategoryHtml(audit, 'credits', 'Credits') +
+    deliverableCategoryHtml(audit, 'other', 'Other Charges') +
+    '<div class="panel" style="margin-top:12px"><h3>Maintenance Review (separate from Element billed totals)</h3>' +
+    (review.pendingStatus ? '<div class="notice">Maintenance Review Pending</div>' : '') +
+    '<p>Element Maintenance Billed: <strong>' + esc(formatMoney(review.billed)) +
+    '</strong> &nbsp; Reviewed / Approved Amount: <strong>' + esc(formatMoney(review.reviewedApproved)) +
+    '</strong> &nbsp; Pending Review: <strong>' + esc(formatMoney(review.pending)) +
+    '</strong> &nbsp; Maintenance Difference: <strong>' + esc(formatMoney(review.difference)) + '</strong></p></div>';
+}
+
+function clientReportHtml(audit) {
+  const client = selectedClient();
+  const totals = elementSummary(audit);
+  const sourceTotal = elementSourceInvoiceTotal(audit);
+  const calculatedTotal = totals.total;
+  const difference = calculatedTotal - sourceTotal;
+  const maintenanceSummary = maintenanceReviewSummary(audit);
+  const review = maintenanceDeliverableSummary(audit);
+  const pivot = elementPivot(audit);
+  const pivotRows = pivot.map(row => '<tr><td>' + esc(row.vin) + '</td>' +
+    [row.ticket, row.lease, row.maintenance, row.uncategorized, row.credits, row.taxRental, row.other, row.total]
+      .map(value => '<td>' + esc(formatMoney(value)) + '</td>').join('') + '</tr>').join('');
+  const detailTable = (title, category) => {
+    const items = elementChargeItems(audit, category);
+    if (!items.length) return '';
+    return '<h3>' + esc(title) + '</h3><table><thead><tr><th>VIN</th><th>Description</th><th>Cost</th></tr></thead><tbody>' +
+      items.map(item => '<tr><td>' + esc(item.vin) + '</td><td>' + esc(item.description) + '</td><td>' + esc(formatMoney(item.cost)) + '</td></tr>').join('') +
+      '<tr><th colspan="2">TOTAL</th><th>' + esc(formatMoney(items.reduce((sum, item) => sum + item.cost, 0))) + '</th></tr></tbody></table>';
+  };
+  const reviewRows = ensureMaintenanceReviewFromElement(audit);
+  return '<!doctype html><html><head><meta charset="utf-8"><title>Element Audit - ' + esc(audit.month) +
+    '</title><style>body{font:14px Arial,sans-serif;color:#172033;margin:32px}h1,h2,h3{color:#111827}table{border-collapse:collapse;width:100%;margin:10px 0 22px}th,td{border:1px solid #d8dee8;padding:7px;text-align:left}th{background:#f3f4f6}.toolbar{margin-bottom:20px}.btn{padding:9px 14px;background:#2563eb;color:white;border:0;border-radius:5px;cursor:pointer}.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.card{border:1px solid #d8dee8;padding:12px}.muted{color:#667085}@media print{.toolbar{display:none}body{margin:10mm}}</style></head><body>' +
+    '<div class="toolbar"><button class="btn" onclick="window.print()">Print / Save as PDF</button></div>' +
+    '<h1>Element Invoice Audit</h1><p><strong>Client:</strong> ' + esc(client.company) + '<br><strong>Short Code:</strong> ' + esc(client.shortCode) +
+    '<br><strong>Station:</strong> ' + esc(client.station) + '<br><strong>Audit Month:</strong> ' + esc(audit.month) +
+    '<br><strong>Invoice Number:</strong> ' + esc(audit.invoiceNumber) + '<br><strong>Invoice Date:</strong> ' + esc(audit.invoiceDate) +
+    '<br><strong>Invoice Total:</strong> ' + esc(formatMoney(sourceTotal)) + '</p>' +
+    '<h2>Element Invoice Charges Summary</h2><div class="summary">' +
+    [['Lease Charges', totals.lease], ['Maintenance Charges', totals.maintenance], ['Uncategorized Charges', totals.uncategorized],
+      ['Ticket / Toll', totals.ticket], ['Credits', totals.credits], ['Tax Rental', totals.taxRental],
+      ['Other Charges', totals.other], ['TOTAL', totals.total]].map(([label, value]) =>
+      '<div class="card"><strong>' + esc(label) + '</strong><br>' + esc(formatMoney(value)) + '</div>').join('') + '</div>' +
+    '<h2>Element Pivot Summary</h2><table><thead><tr><th>VIN</th><th>Ticket / Toll</th><th>Lease Charges</th><th>Maintenance Charges</th><th>Uncategorized Charges</th><th>Credits</th><th>Tax Rental</th><th>Other Charges</th><th>Total Charges</th></tr></thead><tbody>' +
+    pivotRows + '<tr><th>TOTAL</th>' + [totals.ticket, totals.lease, totals.maintenance, totals.uncategorized, totals.credits, totals.taxRental, totals.other, totals.total]
+      .map(value => '<th>' + esc(formatMoney(value)) + '</th>').join('') + '</tr></tbody></table>' +
+    '<h2>Maintenance Review Summary</h2>' +
+    (review.pendingStatus ? '<p><strong>Maintenance Review Pending</strong></p>' : '') +
+    '<p>Element Maintenance Billed: ' + esc(formatMoney(review.billed)) +
+    ' | Reviewed / Approved Amount: ' + esc(formatMoney(review.reviewedApproved)) +
+    ' | Pending Review: ' + esc(formatMoney(review.pending)) +
+    ' | Difference: ' + esc(formatMoney(review.difference)) + '</p>' +
+    '<p>Reviewed Amount: ' + esc(formatMoney(maintenanceSummary.reviewed)) +
+    ' | Approved: ' + esc(formatMoney(maintenanceSummary.approved)) +
+    ' | Disputed: ' + esc(formatMoney(maintenanceSummary.disputed)) + '</p>' +
+    '<h3>Maintenance Details</h3><table><thead><tr><th>VIN</th><th>Description</th><th>Element Charge</th><th>Reviewed Amount</th><th>Difference</th><th>Status</th><th>Notes</th></tr></thead><tbody>' +
+    (reviewRows.length ? reviewRows.map(row => '<tr><td>' + esc(row.vin) + '</td><td>' + esc(row.maintenanceDescription) +
+      '</td><td>' + esc(formatMoney(row.elementCharge)) + '</td><td>' + esc(row.reviewedAmount === '' ? '' : formatMoney(row.reviewedAmount)) +
+      '</td><td>' + esc(row.difference === '' ? '' : formatMoney(row.difference)) +
+      '</td><td>' + esc(row.reviewStatus) + '</td><td>' + esc(row.reviewNotes) + '</td></tr>').join('') :
+      '<tr><td colspan="7">No maintenance charges.</td></tr>') + '</tbody></table>' +
+    detailTable('Ticket / Toll Details', 'ticket') +
+    detailTable('Uncategorized Charges', 'uncategorized') +
+    detailTable('Credits', 'credits') +
+    detailTable('Other Charges', 'other') +
+    '<h2>Element Invoice Reconciliation</h2><p>Calculated Element Total: ' + esc(formatMoney(calculatedTotal)) +
+    '<br>Element Invoice Total: ' + esc(formatMoney(sourceTotal)) +
+    '<br>Difference: ' + esc(formatMoney(difference)) +
+    '<br>Audit Status: ' + esc(Math.abs(difference) < 0.01 ? 'Balanced' : 'Variance') +
+    '</p></body></html>';
+}
+
+function generateClientReport() {
+  const audit = currentElementAudit();
+  if (!audit) {
+    alert('Upload Element invoice data before generating the client report.');
+    return;
+  }
+  const reportWindow = window.open('', '_blank');
+  if (!reportWindow) {
+    alert('The client report tab was blocked. Allow pop-ups for this application and try again.');
+    return;
+  }
+  reportWindow.document.open();
+  reportWindow.document.write(clientReportHtml(audit));
+  reportWindow.document.close();
+}
+
+function element() {
+  setTitle('Element Invoice Audit', 'Audit only the records and charges contained in the Element invoice.');
+  const audits = elementAuditList();
+  const audit = currentElementAudit();
+  if (audit) ensureMaintenanceReviewFromElement(audit);
+  const reviewSummary = audit ? maintenanceReviewSummary(audit) : { totalCharges: 0, pending: 0, reviewed: 0, approved: 0, disputed: 0, totalDifference: 0 };
+  const selectedAuditId = audit && audit.id;
+  $('content').innerHTML =
+    '<div class="panel"><h2>1. ELEMENT INVOICE</h2>' +
+    '<div class="toolbar">' + (audits.length ? '<label>Client audit <select id="elementAuditSelect">' +
+      audits.map(item => '<option value="' + esc(item.id) + '"' + (item.id === selectedAuditId ? ' selected' : '') + '>' +
+        esc(item.month + ' — ' + item.invoiceNumber) + '</option>').join('') + '</select></label>' : '') +
+    '<div class="field"><label>Audit Month</label><input id="elementAuditMonth" value="' + esc(audit && audit.month || '') + '" placeholder="October 2026"></div>' +
+    '<div class="field"><label>Invoice Number</label><input id="elementInvoiceNumber" value="' + esc(audit && audit.invoiceNumber || '') + '"></div>' +
+    '<div class="field"><label>Invoice Date</label><input id="elementInvoiceDate" type="date" value="' + esc(audit && audit.invoiceDate || '') + '"></div>' +
+    '<div class="field"><label>Invoice Total (source)</label><input id="elementInvoiceTotal" type="number" step="0.01" value="' +
+      esc(audit && audit.sourceInvoiceTotal != null && audit.sourceInvoiceTotal !== '' ? audit.sourceInvoiceTotal : (audit ? elementSourceInvoiceTotal(audit) : '')) + '"></div>' +
+    '<button type="button" class="btn secondary" id="saveElementAuditDetails">Save Audit Details</button></div>' +
+    '<div class="drop" style="margin-bottom:12px">Element PDF invoice<br><input id="elementInvoicePdf" type="file" accept=".pdf,application/pdf">' +
+    (audit && audit.invoicePdfName ? '<div class="small">Attached to this audit: ' + esc(audit.invoicePdfName) + '</div>' : '') +
+    '<div class="small">Use the PDF as the invoice reference and enter its invoice total above.</div></div>' +
+    '<div class="drop">Upload Element CSV / CDV<br><input id="elementInvoiceFile" type="file" accept=".csv,.txt,.cdv"></div>' +
+    '<p class="muted">Element invoice data is the source of truth for audit vehicles and charges. Amazon fleet records are not used here.</p>' +
+    '<div class="toolbar" style="margin-top:12px"><input id="elementInvoiceSearch" placeholder="Search Element invoice records"></div>' +
+    elementInvoiceTableHtml(audit) + '</div>' +
+    '<div class="panel" style="margin-top:14px"><h2>2. ELEMENT PIVOT</h2>' +
+    '<div class="toolbar"><input id="elementPivotSearch" placeholder="Search VIN-level pivot"></div>' +
+    elementPivotTableHtml(audit) + '</div>' +
+    '<div class="panel" style="margin-top:14px"><h2>3. MAINTENANCE REVIEW</h2>' +
+    '<div class="toolbar"><button class="btn" id="downloadMaintenanceReview">Download Maintenance Review</button>' +
+    '<button class="btn secondary" id="uploadCompletedMaintenanceReview">Upload Completed Maintenance Review</button>' +
+    '<input id="maintenanceReviewFile" type="file" accept=".csv,.xlsx,.xls" hidden></div>' +
+    '<div class="cards"><div class="card"><div class="muted">Maintenance Charges</div><div class="num">' + formatMoney(reviewSummary.totalCharges) + '</div></div>' +
+    '<div class="card"><div class="muted">Pending Review</div><div class="num">' + formatMoney(reviewSummary.pending) + '</div></div>' +
+    '<div class="card"><div class="muted">Reviewed Amount</div><div class="num">' + formatMoney(reviewSummary.reviewed) + '</div></div>' +
+    '<div class="card"><div class="muted">Approved</div><div class="num">' + formatMoney(reviewSummary.approved) + '</div></div>' +
+    '<div class="card"><div class="muted">Disputed</div><div class="num">' + formatMoney(reviewSummary.disputed) + '</div></div>' +
+    '<div class="card"><div class="muted">Reviewed Difference</div><div class="num">' + formatMoney(reviewSummary.totalDifference) + '</div></div></div>' +
+    '<div class="notice">Review amounts are separate from the original Element charges and invoice total.</div>' +
+    maintenanceReviewTableHtml(audit) +
+    (audit && audit.unmatchedReviewRecords && audit.unmatchedReviewRecords.length ?
+      '<h3>Unmatched Review Records</h3><div class="table"><table><thead><tr><th>VIN</th><th>Client Asset ID</th><th>Description</th><th>Element Charge</th><th>Review Status</th><th>Notes</th></tr></thead><tbody>' +
+      audit.unmatchedReviewRecords.map(entry => '<tr><td>' + esc(entry.vin) + '</td><td>' + esc(entry.clientAssetId) + '</td><td>' +
+        esc(entry.maintenanceDescription) + '</td><td>' + esc(entry.elementCharge) + '</td><td>' + esc(entry.reviewStatus) + '</td><td>' + esc(entry.reviewNotes) + '</td></tr>').join('') +
+      '</tbody></table></div>' : '') + '</div>' +
+    '<div class="panel" style="margin-top:14px"><h2>4. DELIVERABLE</h2>' +
+    (audit ? deliverableHtml(audit) : '<p class="muted">Upload Element invoice data to build the client deliverable.</p>') + '</div>' +
+    '<div class="panel" style="margin-top:14px;text-align:right"><button type="button" class="btn" id="generateClientReport">Generate Client Report</button></div>';
+  if ($('downloadMaintenanceReview')) {
+    $('downloadMaintenanceReview').addEventListener('click', exportMaintenanceReviewWorkbook);
+  }
+  if ($('uploadCompletedMaintenanceReview')) {
+    $('uploadCompletedMaintenanceReview').addEventListener('click', () => $('maintenanceReviewFile').click());
+  }
+  if ($('maintenanceReviewFile')) {
+    $('maintenanceReviewFile').addEventListener('change', event => parseMaintenanceReviewFile(event.target.files[0]));
+  }
+  if ($('elementInvoiceFile')) {
+    $('elementInvoiceFile').addEventListener('change', event => parseElementInvoiceFile(event.target.files[0]));
+  }
+  if ($('elementInvoicePdf')) {
+    $('elementInvoicePdf').addEventListener('change', event => attachElementInvoicePdf(event.target.files[0]));
+  }
+  if ($('saveElementAuditDetails')) {
+    $('saveElementAuditDetails').addEventListener('click', saveElementAuditDetails);
+  }
+  if ($('generateClientReport')) {
+    $('generateClientReport').addEventListener('click', generateClientReport);
+  }
+  if ($('elementAuditSelect')) {
+    $('elementAuditSelect').addEventListener('change', event => {
+      changeElementAudit(event.target.value);
+    });
+  }
+  document.querySelectorAll('[data-element-sort]').forEach(button => {
+    button.addEventListener('click', () => setElementTableSort(button.dataset.elementSort));
+  });
+  if ($('elementInvoiceSearch')) {
+    $('elementInvoiceSearch').addEventListener('input', event => filterElementRows(event.target, '.element-source-row'));
+  }
+  if ($('elementPivotSearch')) {
+    $('elementPivotSearch').addEventListener('input', event => filterElementRows(event.target, '.element-pivot-row'));
+  }
+  document.querySelectorAll('[data-source-detail]').forEach(button => {
+    button.addEventListener('click', () => {
+      const detail = document.querySelector('[data-source-detail-row="' + button.dataset.sourceDetail + '"]');
+      if (detail) {
+        detail.dataset.expanded = String(!detail.hidden);
+        detail.hidden = !detail.hidden;
+      }
+    });
+  });
+  document.querySelectorAll('[data-maintenance-review-field]').forEach(input => {
+    input.addEventListener('change', () => {
+      const audit = currentElementAudit();
+      if (!audit) return;
+      const row = ensureMaintenanceReviewFromElement(audit)[Number(input.dataset.index)];
+      if (!row) return;
+      const field = input.dataset.maintenanceReviewField;
+      row[field] = input.value;
+      if (field === 'reviewedAmount') {
+        row.difference = input.value === '' ? '' : String(parseNumeric(row.reviewedAmount) - parseNumeric(row.elementCharge));
+      } else if (field === 'difference') {
+        row.difference = String(parseNumeric(row.reviewedAmount) - parseNumeric(row.elementCharge));
+      }
+      save();
+      element();
+    });
+  });
 }
 
 function leaseplan() {
