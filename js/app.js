@@ -927,8 +927,10 @@ function manualStatusOptions(value) {
 
 function editVehicle(vin) {
   const normalizedVin = normalizeVin(vin);
-  const vehicle = clientFleet().find(record => normalizeVin(record.vin) === normalizedVin);
+  const clientId = currentClientId;
+  const vehicle = clientFleet(clientId).find(record => normalizeVin(record.vin) === normalizedVin);
   if (!vehicle) return fleet();
+  const vehicleId = vehicle.id;
   currentView = 'vehicleEdit';
   setTitle('View / Edit Vehicle', selectedClient().shortCode + ' — ' + vehicle.vin);
   const amazonLabels = [
@@ -951,23 +953,30 @@ function editVehicle(vin) {
       const yesNo = key === 'atDealership' || key === 'afsEligible';
       return '<div class="field' + (multiline ? ' full' : '') + '"><label for="manual-' + key + '">' + esc(label) +
         '</label>' + (multiline
-          ? '<textarea id="manual-' + key + '" rows="3">' + value + '</textarea>'
+          ? '<textarea id="manual-' + key + '" name="manual-' + key + '" rows="3">' + value + '</textarea>'
           : yesNo
-            ? '<select id="manual-' + key + '">' + yesNoHtml(rawValue) + '</select>'
+            ? '<select id="manual-' + key + '" name="manual-' + key + '">' + yesNoHtml(rawValue) + '</select>'
             : key === 'status'
-              ? '<select id="manual-' + key + '">' + manualStatusOptions(rawValue) + '</select>'
-              : '<input id="manual-' + key + '" value="' + value + '"' +
+              ? '<select id="manual-' + key + '" name="manual-' + key + '">' + manualStatusOptions(rawValue) + '</select>'
+              : '<input id="manual-' + key + '" name="manual-' + key + '" value="' + value + '"' +
                 (key === 'dateGrounded' ? ' type="date"' : '') + '>') + '</div>';
     }).join('') +     '</div><div class="toolbar" style="margin-top:14px"><button class="btn" type="submit">Save Changes</button></div></form>' +
     renderGroundingHistory(vehicle);
   $('manualVehicleForm').addEventListener('submit', event => {
     event.preventDefault();
-    const record = clientFleet().find(item => normalizeVin(item.vin) === normalizedVin);
-    if (!record) return fleet();
-    const previousManual = { ...record.manual };
-    const updatedManual = { ...record.manual };
+    const clientRecords = state.fleetsByClient[clientId] || [];
+    const record = clientRecords.find(item => item.id === vehicleId) ||
+      clientRecords.find(item => normalizeVin(item.vin) === normalizedVin);
+    if (!record) {
+      alert('This vehicle is no longer available for the selected client. Reopen the record and try again.');
+      return fleet();
+    }
+    const previousManual = { ...emptyManual(), ...(record.manual || {}) };
+    const updatedManual = { ...emptyManual(), ...(record.manual || {}) };
     MANUAL_FIELDS.forEach(([key]) => {
-      updatedManual[key] = $('manual-' + key).value;
+      const field = event.currentTarget.elements.namedItem('manual-' + key);
+      if (!field) throw new Error('Missing fleet team field: ' + key);
+      updatedManual[key] = field.value;
     });
     if (isGrounded(record) && MANUAL_FIELDS.some(([key]) => previousManual[key] !== updatedManual[key])) {
       record.groundingHistory = record.groundingHistory || [];
@@ -979,6 +988,7 @@ function editVehicle(vin) {
     }
     if (isGrounded(record) && !updatedManual.dateGrounded) updatedManual.dateGrounded = todayDate();
     record.manual = updatedManual;
+    currentClientId = clientId;
     save();
     fleet();
   });
