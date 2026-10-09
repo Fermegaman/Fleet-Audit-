@@ -158,7 +158,11 @@ function normalizeClientFleet(client, records, hasAmazonImport) {
     vehicle.vin = vin;
     vehicle.amazon.vin = vin;
     vehicle.id = vehicle.id || vehicleIdForVin(vin, client.id);
-    if (!hasAmazonImport) vehicle.presentInLatestExport = false;
+    if (!hasAmazonImport && AMAZON_FIELDS.some(field =>
+      field !== 'vin' && vehicle.amazon[field] != null && vehicle.amazon[field] !== ''
+    )) {
+      vehicle.presentInLatestExport = true;
+    }
     if (!byVin.has(vin)) {
       byVin.set(vin, vehicle);
       normalizedRecords.push(vehicle);
@@ -417,7 +421,7 @@ function fleetTable(records, tableId, columns = FLEET_COLUMNS) {
         : '');
       const inactive = isInactiveStatus(vehicle.amazon.status);
       const groundedActive = !inactive && isActiveStatus(vehicle.amazon.status) && isGrounded(vehicle);
-      return '<tr class="fleet-row' + (inactive ? ' inactive' : groundedActive ? ' grounded' : '') + '">' +
+      return '<tr class="fleet-row' + (absent ? ' absent' : inactive ? ' inactive' : groundedActive ? ' grounded' : '') + '">' +
         columns.map(([key, , getValue]) => '<td>' +
           (key === 'vin' ? vinCell : esc(key === 'operationalStatus' &&
             vehicle.lastOperationalChange === 'GROUNDED->OPERATIONAL'
@@ -578,7 +582,12 @@ function renderClientSelector() {
 function fleet() {
   const client = selectedClient();
   const currentRecords = currentFleetRecords();
-  const grounded = currentRecords.filter(isGrounded);
+  const grounded = clientFleet().filter(vehicle =>
+    isGrounded(vehicle) && (!hasAmazonFleetImport() || vehicle.presentInLatestExport)
+  );
+  const noLongerPresent = hasAmazonFleetImport()
+    ? clientFleet().filter(vehicle => !vehicle.presentInLatestExport)
+    : [];
   const operational = currentRecords.filter(vehicle =>
     String(vehicle.amazon.operationalStatus || '').trim().toUpperCase() === 'OPERATIONAL'
   );
@@ -601,6 +610,11 @@ function fleet() {
     fleetTable(currentRecords, 'fleetRecords') + '</div>' +
     '<div class="panel" style="margin-top:14px"><h3>Grounded Vehicles</h3>' +
     fleetTable(grounded, 'groundedVehicles', GROUNDED_COLUMNS) + '</div>' +
+    (noLongerPresent.length
+      ? '<div class="panel" style="margin-top:14px"><h3>Not Present in Latest Amazon Export</h3>' +
+        '<p class="muted">These records are retained for history and are not included in the latest export.</p>' +
+        fleetTable(noLongerPresent, 'missingFleetRecords') + '</div>'
+      : '') +
     '<div class="panel" id="groundedForm" style="margin-top:14px"><h3>Add grounded vehicle</h3>' +
     '<div class="formgrid">' +
     '<div class="field"><label>VIN</label><input id="newVin" required></div>' +
@@ -618,6 +632,7 @@ function fleet() {
   $('addGroundedVehicle').addEventListener('click', addGrounded);
   wireFleetTable('fleetRecords', currentRecords);
   wireFleetTable('groundedVehicles', grounded, GROUNDED_COLUMNS);
+  wireFleetTable('missingFleetRecords', noLongerPresent);
   renderImportSummary();
 }
 
@@ -780,8 +795,7 @@ function applyFleetImport(rows, indexes) {
         groundingHistory: [],
         presentInLatestExport: true
       };
-      if (incomingActive &&
-          String(amazon.operationalStatus || '').trim().toUpperCase() === 'GROUNDED') {
+      if (String(amazon.operationalStatus || '').trim().toUpperCase() === 'GROUNDED') {
         vehicle.manual.dateGrounded = todayDate();
         vehicle.groundingHistory.push({
           event: 'Became grounded',
@@ -861,7 +875,6 @@ function applyFleetImport(rows, indexes) {
     }
   });
   summary.grounded = Array.from(incoming.values()).filter(amazon =>
-    isActiveStatus(amazon.status) &&
     String(amazon.operationalStatus || '').trim().toUpperCase() === 'GROUNDED'
   ).length;
   state.importSummaries[currentClientId] = summary;
@@ -881,11 +894,12 @@ function renderImportSummary() {
       (change.from != null ? ' (' + change.from + ' → ' + change.to + ')' : '')) + '</li>').join('') + '</ul>'
     : '<p>No vehicle changes detected.</p>';
   $('importResult').innerHTML = '<div class="notice"><b>Latest Amazon fleet import</b><br>' +
-    'Active vehicles in Amazon file: ' + (summary.activeVehicles == null ? summary.imported : summary.activeVehicles) +
+    'Vehicles imported: ' + summary.imported +
+    ' · New vehicles: ' + summary.newVehicles +
+    ' · Existing vehicles updated: ' + summary.updatedVehicles +
+    ' · Active vehicles in Amazon file: ' + (summary.activeVehicles == null ? summary.imported : summary.activeVehicles) +
     ' · Inactive vehicles in Amazon file: ' + (summary.inactiveVehicles || 0) +
-    ' · Existing active vehicles updated: ' + (summary.existingActiveUpdated == null ? summary.updatedVehicles : summary.existingActiveUpdated) +
-    ' · New active vehicles added: ' + (summary.newActiveAdded == null ? summary.newVehicles : summary.newActiveAdded) +
-    ' · Grounded active vehicles: ' +
+    ' · Grounded vehicles: ' +
     summary.grounded + ' · Returned to operational: ' + summary.returnedToOperational +
     ' · No longer present in latest export: ' + summary.noLongerPresent + '</div>' +
     '<details><summary>View detected changes</summary>' + changes + '</details>';
