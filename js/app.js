@@ -20,6 +20,13 @@ const MANUAL_FIELDS = [
   ['status', 'Status'],
   ['notes', 'Notes']
 ];
+// Verification-only detail sum from the supplied PDF; never used as the invoice total or billed charge.
+const ELEMENT_PDF_DETAIL_REFERENCES = {
+  'client-agpl|october2026|0011794022': {
+    total: 845.73,
+    source: 'Previously extracted from the supplied Element PDF; verify against the attached source.'
+  }
+};
 let saved;
 try {
   saved = JSON.parse(localStorage.getItem(KEY) || 'null');
@@ -64,6 +71,7 @@ function initializeState() {
   state.clients = Array.isArray(state.clients) ? state.clients : [];
   state.actions = Array.isArray(state.actions) ? state.actions : [];
   state.elementAudits = Array.isArray(state.elementAudits) ? state.elementAudits : [];
+  state.activeElementAuditByClient = state.activeElementAuditByClient || {};
   state.leaseAudits = Array.isArray(state.leaseAudits) ? state.leaseAudits : [];
   state.clients.forEach(client => {
     client.shortCode = String(client.shortCode || '').trim().toUpperCase();
@@ -111,6 +119,25 @@ function initializeState() {
         item.shortCode === String(record.client || '').trim().toUpperCase()
       );
       record.clientId = client ? client.id : legacyClient.id;
+    }
+  });
+  state.elementAudits.forEach(audit => {
+    audit.id = audit.id || createElementAuditId();
+    const client = state.clients.find(item => item.id === audit.clientId);
+    audit.clientName = audit.clientName || (client && client.company) || '';
+    audit.shortCode = audit.shortCode || (client && client.shortCode) || '';
+    audit.station = audit.station || (client && client.station) || '';
+    const maintenanceReference = ELEMENT_PDF_DETAIL_REFERENCES[
+      elementAuditKey(audit.clientId, audit.month, audit.invoiceNumber)
+    ];
+    if ((audit.pdfMaintenanceDetailTotal == null || audit.pdfMaintenanceDetailTotal === '') && maintenanceReference) {
+      audit.pdfMaintenanceDetailTotal = String(maintenanceReference.total);
+      audit.pdfMaintenanceDetailSource = maintenanceReference.source;
+    }
+    if (audit.sourceInvoiceTotal !== '' && Number(audit.sourceInvoiceTotal) === 0 &&
+        Array.isArray(audit.elementRecords) &&
+        audit.elementRecords.some(record => Object.values(record.categories || {}).some(value => Number(value) !== 0))) {
+      audit.sourceInvoiceTotal = '';
     }
   });
 }
@@ -1099,9 +1126,21 @@ function parseNumeric(value) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function parseEnteredMoney(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return '';
+  const normalized = raw.replace(/[$,\s]/g, '').replace(/^\((.*)\)$/, '-$1');
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function formatMoney(value) {
   const amount = typeof value === 'number' ? value : parseNumeric(value);
   return '$' + amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function roundCurrency(value) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
 function maintenanceReviewSummary(audit) {
@@ -1133,6 +1172,76 @@ function maintenanceReviewSummary(audit) {
   };
 }
 
+function ensureTollReviewFromElement(audit) {
+  if (!audit) return [];
+  const priorRows = Array.isArray(audit.tollReview) ? audit.tollReview : [];
+  const queues = new Map();
+  priorRows.forEach(row => {
+    const key = [normalizeVin(row.vin), roundCurrency(parseNumeric(row.elementCharge)),
+      normalizedElementKey(row.description)].join('|');
+    const queue = queues.get(key) || [];
+    queue.push(row);
+    queues.set(key, queue);
+  });
+  audit.tollReview = [];
+  elementAuditRecords(audit).forEach(record => {
+    const charge = Number(record.categories && record.categories.ticket) || 0;
+    if (Math.abs(charge) < 0.005) return;
+    const source = record.source || {};
+    const description = String(sourceValue(source, [
+      'Ticket Description', 'Ticket / Toll Description', 'Toll Description'
+    ]) || record.description || 'Element Ticket / Toll charge');
+    const key = [normalizeVin(record.vin), roundCurrency(charge), normalizedElementKey(description)].join('|');
+    const queue = queues.get(key);
+    const prior = queue && queue.length ? queue.shift() : null;
+    audit.tollReview.push(Object.assign(prior || {}, {
+      vin: normalizeVin(record.vin),
+      unit: record.unit || '',
+      clientAssetId: record.clientAssetId || '',
+      description,
+      elementCharge: charge,
+      reviewedAmount: prior && prior.reviewedAmount != null ? prior.reviewedAmount : '',
+      difference: prior && prior.reviewedAmount != null && prior.reviewedAmount !== ''
+        ? String(roundCurrency(parseNumeric(prior.reviewedAmount) - charge))
+        : '',
+      reviewStatus: normalizeMaintenanceReviewStatus(prior && prior.reviewStatus),
+      reviewNotes: prior && prior.reviewNotes != null ? prior.reviewNotes : ''
+    }));
+  });
+  audit.tollReview.forEach(row => {
+    row.reviewStatus = normalizeMaintenanceReviewStatus(row.reviewStatus);
+    if (row.reviewedAmount != null && row.reviewedAmount !== '') {
+      row.difference = String(roundCurrency(parseNumeric(row.reviewedAmount) - parseNumeric(row.elementCharge)));
+    }
+  });
+  audit.unmatchedTollReviewRecords = Array.isArray(audit.unmatchedTollReviewRecords)
+    ? audit.unmatchedTollReviewRecords
+    : [];
+  return audit.tollReview;
+}
+
+function tollReviewSummary(audit) {
+  const rows = ensureTollReviewFromElement(audit);
+  const reviewedRows = rows.filter(row =>
+    normalizeMaintenanceReviewStatus(row.reviewStatus) !== 'Pending Review' &&
+    row.reviewedAmount !== '' && row.reviewedAmount != null
+  );
+  return {
+    billed: roundCurrency(rows.reduce((sum, row) => sum + parseNumeric(row.elementCharge), 0)),
+    reviewed: roundCurrency(reviewedRows.reduce((sum, row) => sum + parseNumeric(row.reviewedAmount), 0)),
+    approved: roundCurrency(reviewedRows.filter(row => normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Approved')
+      .reduce((sum, row) => sum + parseNumeric(row.reviewedAmount), 0)),
+    pending: roundCurrency(rows.filter(row =>
+      normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Pending Review' ||
+      row.reviewedAmount === '' || row.reviewedAmount == null
+    ).reduce((sum, row) => sum + parseNumeric(row.elementCharge), 0)),
+    disputed: roundCurrency(reviewedRows.filter(row => normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Disputed')
+      .reduce((sum, row) => sum + parseNumeric(row.reviewedAmount), 0)),
+    difference: roundCurrency(reviewedRows.reduce((sum, row) =>
+      sum + parseNumeric(row.reviewedAmount) - parseNumeric(row.elementCharge), 0))
+  };
+}
+
 function ensureAuditMaintenanceReview(audit) {
   if (!audit) return [];
   audit.maintenanceReview = Array.isArray(audit.maintenanceReview) ? audit.maintenanceReview : [];
@@ -1160,10 +1269,157 @@ function elementAuditList() {
 }
 
 function currentElementAudit() {
+  state.activeElementAuditByClient = state.activeElementAuditByClient || {};
+  const active = state.activeElementAuditByClient[currentClientId];
+  if (active) return active;
   const audits = elementAuditList();
   const selectedId = state.selectedElementAuditByClient &&
     state.selectedElementAuditByClient[currentClientId];
-  return audits.find(audit => audit.id === selectedId) || audits[audits.length - 1] || null;
+  const selected = audits.find(audit => audit.id === selectedId) || audits[audits.length - 1];
+  if (!selected) return null;
+  state.activeElementAuditByClient[currentClientId] = JSON.parse(JSON.stringify(selected));
+  return state.activeElementAuditByClient[currentClientId];
+}
+
+function cloneElementAudit(audit) {
+  return JSON.parse(JSON.stringify(audit));
+}
+
+function createElementAuditId() {
+  const random = typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+  return 'element-audit-' + random;
+}
+
+function elementAuditSignature(audit) {
+  if (!audit) return '';
+  const data = cloneElementAudit(audit);
+  ['savedAt', 'updatedAt', 'reconciliationDifference', 'reconciliationStatus'].forEach(key => delete data[key]);
+  return JSON.stringify(data);
+}
+
+function elementAuditIsDirty(audit) {
+  if (!audit) return false;
+  const savedAudit = state.elementAudits.find(item => item.id === audit.id);
+  return !savedAudit || elementAuditSignature(savedAudit) !== elementAuditSignature(audit);
+}
+
+function elementAuditReconciliation(audit) {
+  const calculatedTotal = elementSummary(audit).total;
+  const invoiceTotal = elementSourceInvoiceTotal(audit);
+  const difference = invoiceTotal == null ? null : roundCurrency(calculatedTotal - invoiceTotal);
+  return {
+    calculatedTotal,
+    invoiceTotal,
+    difference,
+    status: invoiceTotal == null ? 'Missing invoice total' :
+      Math.abs(difference) < 0.01 ? 'Balanced' : 'Variance'
+  };
+}
+
+function elementReconciliationHtml(audit, includeMaintenanceInput = true) {
+  if (!audit) return '<div class="notice">Enter invoice details and upload Element CSV/CDV records to begin reconciliation.</div>';
+  const reconciliation = elementAuditReconciliation(audit);
+  const maintenanceVariance = elementMaintenanceVariance(audit);
+  return '<div class="cards">' +
+    [['Calculated CSV Total', formatMoney(reconciliation.calculatedTotal)],
+      ['Actual Invoice Total', reconciliation.invoiceTotal == null ? 'Not entered' : formatMoney(reconciliation.invoiceTotal)],
+      ['Difference (CSV − Invoice)', reconciliation.difference == null ? '—' : formatMoney(reconciliation.difference)],
+      ['Reconciliation Status', reconciliation.status]].map(([label, value]) =>
+      '<div class="card"><div class="muted">' + esc(label) + '</div><div class="num">' + esc(value) + '</div></div>'
+    ).join('') + '</div>' +
+    (includeMaintenanceInput ? '<div class="field" style="margin-top:10px"><label>PDF Maintenance Detail Total' +
+      (audit.pdfMaintenanceDetailSource ? ' (previously extracted; verify)' : ' (optional verification)') + '</label>' +
+      '<input id="pdfMaintenanceDetailTotal" type="number" step="0.01" value="' +
+      esc(audit.pdfMaintenanceDetailTotal == null ? '' : audit.pdfMaintenanceDetailTotal) + '">' +
+      '<div class="small">Enter the sum of the maintenance detail lines from the PDF to compare it with the CSV maintenance category. This does not change billed or reviewed charges.</div></div>' : '') +
+    (maintenanceVariance ? '<div class="notice">Maintenance source check: CSV category ' +
+      esc(formatMoney(maintenanceVariance.csvTotal)) + '; PDF detail total ' +
+      esc(formatMoney(maintenanceVariance.pdfDetailTotal)) + '; difference (PDF − CSV) ' +
+      esc(formatMoney(maintenanceVariance.difference)) +
+      '. ' + esc(maintenanceVariance.source) +
+      ' Investigate this source-level variance; it does not alter the invoice or maintenance review amounts.</div>' : '');
+}
+
+function saveCurrentElementAudit(audit, confirmOverwrite = true) {
+  if (!audit) throw new Error('There is no active Element audit to save.');
+  if (!String(audit.month || '').trim() || !String(audit.invoiceNumber || '').trim() ||
+      !String(audit.invoiceDate || '').trim()) {
+    alert('Enter the audit month, invoice number, and invoice date before saving this audit.');
+    return null;
+  }
+  const existingById = state.elementAudits.find(item => item.id === audit.id);
+  if (existingById && elementAuditMonthKey(existingById.clientId, existingById.month) !==
+      elementAuditMonthKey(audit.clientId, audit.month)) {
+    alert('A saved audit cannot be moved to a different client or month. Use Archive & Start New Month for a new monthly audit.');
+    return null;
+  }
+  if (confirmOverwrite && existingById &&
+      elementAuditSignature(existingById) !== elementAuditSignature(audit) &&
+      !window.confirm('This will update the saved audit for ' +
+        (existingById.clientName || audit.clientName || 'this client') + ', ' +
+        existingById.month + ', invoice ' + existingById.invoiceNumber +
+        '. Continue and replace its saved data?')) {
+    return null;
+  }
+  const client = state.clients.find(item => item.id === audit.clientId);
+  if (!client) throw new Error('The active Element audit has no matching client.');
+  audit.clientName = client.company;
+  audit.shortCode = client.shortCode;
+  audit.station = client.station;
+  audit.updatedAt = new Date().toISOString();
+  audit.createdAt = audit.createdAt || audit.updatedAt;
+  retainElementMaintenanceVerification(audit);
+  ensureTollReviewFromElement(audit);
+  const reconciliation = elementAuditReconciliation(audit);
+  audit.reconciliationDifference = reconciliation.difference;
+  audit.reconciliationStatus = reconciliation.status;
+  const duplicate = state.elementAudits.find(item =>
+    item.clientId === audit.clientId &&
+    elementAuditMonthKey(item.clientId, item.month) ===
+      elementAuditMonthKey(audit.clientId, audit.month)
+  );
+  if (duplicate && duplicate.id !== audit.id) {
+    alert('A saved audit already exists for this client and month. Open that audit from Audit History instead of creating a duplicate.');
+    return null;
+  }
+  const index = state.elementAudits.findIndex(item => item.id === audit.id);
+  const previousSavedAudit = index >= 0 ? state.elementAudits[index] : null;
+  const hadActiveWorkspace = Object.prototype.hasOwnProperty.call(
+    state.activeElementAuditByClient, audit.clientId
+  );
+  const previousActiveWorkspace = state.activeElementAuditByClient[audit.clientId];
+  const previousSelectedAuditId = state.selectedElementAuditByClient &&
+    state.selectedElementAuditByClient[audit.clientId];
+  const savedAudit = cloneElementAudit(audit);
+  savedAudit.savedAt = savedAudit.savedAt || savedAudit.updatedAt;
+  if (index >= 0) state.elementAudits[index] = savedAudit;
+  else state.elementAudits.push(savedAudit);
+  state.activeElementAuditByClient[audit.clientId] = audit;
+  state.selectedElementAuditByClient = state.selectedElementAuditByClient || {};
+  state.selectedElementAuditByClient[audit.clientId] = audit.id;
+  try {
+    save();
+  } catch (error) {
+    if (index >= 0) state.elementAudits[index] = previousSavedAudit;
+    else state.elementAudits = state.elementAudits.filter(item => item.id !== audit.id);
+    if (hadActiveWorkspace) {
+      state.activeElementAuditByClient[audit.clientId] = previousActiveWorkspace;
+    } else {
+      delete state.activeElementAuditByClient[audit.clientId];
+    }
+    state.selectedElementAuditByClient = state.selectedElementAuditByClient || {};
+    if (previousSelectedAuditId) {
+      state.selectedElementAuditByClient[audit.clientId] = previousSelectedAuditId;
+    } else {
+      delete state.selectedElementAuditByClient[audit.clientId];
+    }
+    console.error('Unable to save the Element audit to browser storage.', error);
+    alert('The Element audit could not be saved in browser storage. Export a backup and check available storage.');
+    return null;
+  }
+  return audit;
 }
 
 function normalizedElementKey(value) {
@@ -1172,6 +1428,10 @@ function normalizedElementKey(value) {
 
 function elementAuditKey(clientId, month, invoiceNumber) {
   return [clientId, normalizedElementKey(month), normalizedElementKey(invoiceNumber)].join('|');
+}
+
+function elementAuditMonthKey(clientId, month) {
+  return [clientId, normalizedElementKey(month)].join('|');
 }
 
 function sourceValue(source, candidates) {
@@ -1245,9 +1505,14 @@ function elementRecordsFromText(text) {
   if (headerIndex < 0) {
     throw new Error('Could not find an Element invoice header row containing VIN and charge fields.');
   }
+  const headerCounts = new Map();
   const headers = rows[headerIndex].map((header, index) => {
     const value = String(header || '').trim();
-    return value || 'Column ' + (index + 1);
+    const label = value || 'Column ' + (index + 1);
+    const key = normalizedElementKey(label);
+    const count = (headerCounts.get(key) || 0) + 1;
+    headerCounts.set(key, count);
+    return count === 1 ? label : label + ' [' + count + ']';
   });
   return rows.slice(headerIndex + 1).map(values => {
     const source = {};
@@ -1258,14 +1523,70 @@ function elementRecordsFromText(text) {
   }).filter(source => Object.values(source).some(value => String(value).trim()));
 }
 
+const ELEMENT_METADATA_HEADERS = new Set([
+  'corp', 'client', 'invoicedate', 'invoice', 'invoicenumber', 'preference',
+  'invoicetotal', 'breakdown', 'unit', 'unitnumber', 'clientassetid', 'vin',
+  'driverlastname', 'driverfirstname'
+]);
+const ELEMENT_OTHER_CHARGE_HEADERS = new Set([
+  'accidentmanagementcharges', 'accidentmanagementfee', 'fasandmanagementfees',
+  'fleetadminservicesfee', 'fleetlinefee', 'fuelcharges',
+  'informationconsultingfee', 'insurance', 'motorvehiclerecord',
+  'onboardhardwareandinstall', 'onboardservicefee', 'rentalcar', 'safety',
+  'servicecardfee', 'vehicleexpensereportingfee', 'consultingservices',
+  'deliveryfee', 'deliveryrelatedcharges', 'latecharges', 'taxfederal',
+  'taxlocal', 'taxmiscellaneous', 'taxpersonalproperty', 'taxsalesexcise',
+  'titleandregistrationcharges', 'titleregistrationfee', 'usedvehiclesalefee',
+  'usedvehiclesales', 'taxfuelalternative', 'reimbursementprogram',
+  'telematicshardwareandinstal', 'telematicsservicefee', 'telematicsmonitor',
+  'ceidrivercare', 'passthru', 'programfee', 'titleandregistration',
+  'titleregistration'
+]);
+
+function elementHeaderKey(header) {
+  return normalizedElementKey(String(header || '').replace(/\s+\[\d+\]$/, ''));
+}
+
+function elementChargeCategory(header) {
+  const key = elementHeaderKey(header);
+  if (/^totalunitcharges$/.test(key)) return '';
+  if (key === 'leaseadjustments' || key === 'leasecharges') return 'lease';
+  if (key === 'maintenancecharges' || key === 'maintenancefee') return 'maintenance';
+  if (key === 'ticket') return 'ticket';
+  if (key === 'taxrental') return 'taxRental';
+  if (key === 'chargesnotcategorized' || key === 'feenotcategorized') return 'uncategorized';
+  if (key.includes('credit')) return 'credits';
+  if (key === 'other' || ELEMENT_OTHER_CHARGE_HEADERS.has(key)) return 'other';
+  if (ELEMENT_METADATA_HEADERS.has(key)) return '';
+  return 'uncategorized';
+}
+
+function elementInvoiceDate(value) {
+  const raw = String(value == null ? '' : value).trim();
+  const digits = raw.replace(/\D/g, '');
+  if (/^\d{8}$/.test(digits)) {
+    const iso = digits.slice(0, 4) + '-' + digits.slice(4, 6) + '-' + digits.slice(6, 8);
+    const date = new Date(iso + 'T00:00:00Z');
+    if (Number.isNaN(date.getTime())) return { iso: '', month: '' };
+    return {
+      iso,
+      month: new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date)
+    };
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return { iso: '', month: '' };
+  const iso = date.toISOString().slice(0, 10);
+  return {
+    iso,
+    month: new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(date)
+  };
+}
+
 function elementRecordValues(source) {
   const vin = normalizeVin(sourceValue(source, ['VIN', 'VIN #', 'VIN Number', 'VIN No']));
   const unit = sourceValue(source, ['Unit', 'Unit Number', 'Vehicle Number']);
   const clientAssetId = sourceValue(source, ['Client Asset ID', 'Client Asset ID #', 'Asset ID']);
-  const description = sourceValue(source, [
-    'Breakdown / Description', 'Breakdown Description', 'Maintenance Description',
-    'Description', 'Breakdown', 'Charge Description'
-  ]);
+  const description = sourceValue(source, ['Breakdown', 'Breakdown / Description', 'Breakdown Description']);
   const totalValue = sourceValue(source, ['Total Unit Charges', 'Total Charges', 'Unit Total']);
   const categories = {
     lease: 0,
@@ -1276,80 +1597,97 @@ function elementRecordValues(source) {
     taxRental: 0,
     other: 0
   };
-  let foundCategoryAmount = false;
-  let foundGenericAmount = false;
-  let genericAmount = 0;
+  const chargeClassifications = [];
   Object.entries(source || {}).forEach(([header, rawValue]) => {
-    const key = normalizedElementKey(header);
-    const value = parseNumeric(rawValue);
-    if (!key || !value || /^(vin|unit|unitnumber|clientassetid|assetid|year|date|invoicenumber|invoice|ticketnumber)$/.test(key)) {
-      return;
+    const sourceCategory = elementChargeCategory(header);
+    if (!sourceCategory) return;
+    const raw = String(rawValue == null ? '' : rawValue).trim();
+    if (!raw) return;
+    const normalizedAmount = raw.replace(/[$,\s]/g, '').replace(/^\((.*)\)$/, '-$1');
+    const value = Number(normalizedAmount);
+    if (!Number.isFinite(value)) {
+      throw new Error('Invalid charge amount "' + raw + '" in Element column "' +
+        header.replace(/\s+\[\d+\]$/, '') + '".');
     }
-    if (/^(totalunitcharges|totalcharges|unittotal|invoicetotal)$/.test(key)) return;
-    let category = '';
-    if (/taxrental|rentaltax/.test(key)) category = 'taxRental';
-    else if (/(lease|rental)/.test(key) && /(charge|amount|cost|fee|lease|rental)/.test(key)) category = 'lease';
-    else if (/(maintenance|repair)/.test(key) && /(charge|amount|cost|fee|maintenance|repair)/.test(key)) category = 'maintenance';
-    else if (/(ticket|toll)/.test(key) && !/(number|id|reference)/.test(key)) category = 'ticket';
-    else if (/(uncategorized|notcategorized)/.test(key)) category = 'uncategorized';
-    else if (/credit/.test(key)) category = 'credits';
-    else if (/(misc|adjustment|surcharge)/.test(key)) category = 'other';
-    else if (/other/.test(key) && /(charge|amount|cost|fee|other)/.test(key)) category = 'other';
-
-    if (category) {
-      categories[category] += value;
-      foundCategoryAmount = true;
-      return;
-    }
-    if (/(amount|charge|cost|fee|tax|toll|ticket|credit)/.test(key)) {
-      genericAmount += value;
-      foundGenericAmount = true;
-    }
+    if (!value) return;
+    const descriptionText = String(description || '');
+    const sourceText = header.replace(/\s+\[\d+\]$/, '') + ' ' + descriptionText;
+    const explicitCredit = /\b(credits?|rebates?|refunds?)\b/i.test(sourceText);
+    const explicitAdjustment = /\b(adjust(?:ments?)?|adjs?|reversals?|corrections?|true[\s-]?ups?)\b/i.test(sourceText);
+    const category = value < 0 && !explicitCredit && !explicitAdjustment
+      ? 'credits'
+      : sourceCategory;
+    categories[category] += value;
+    chargeClassifications.push({
+      sourceHeader: header.replace(/\s+\[\d+\]$/, ''),
+      sourceCategory,
+      auditCategory: category,
+      amount: value,
+      reason: category === 'credits' && value < 0 && sourceCategory !== 'credits'
+        ? 'Negative source charge without an explicit adjustment label; classified as a credit.'
+        : value < 0 && explicitAdjustment && !explicitCredit
+          ? 'Negative amount retained in the source category because the source explicitly labels an adjustment.'
+        : category === sourceCategory
+          ? 'Retained in the category identified by the source field.'
+          : 'Identified as a credit by the source field or description.'
+    });
   });
 
   const total = parseNumeric(totalValue);
-  if (!foundCategoryAmount && foundGenericAmount) {
-    const label = [
-      sourceValue(source, ['Charge Category', 'Category', 'Charge Type', 'Breakdown / Description', 'Description']),
-      description
-    ].filter(Boolean).join(' ').toLowerCase();
-    const category = /maint|repair|service|parts|labor/.test(label) ? 'maintenance' :
-      /ticket|toll/.test(label) ? 'ticket' :
-      /lease|rental/.test(label) ? 'lease' :
-      /credit/.test(label) ? 'credits' :
-      /tax/.test(label) ? 'taxRental' : 'uncategorized';
-    categories[category] += genericAmount;
-  } else if (foundCategoryAmount && foundGenericAmount) {
-    categories.other += genericAmount;
-  }
-  if (!foundCategoryAmount && !foundGenericAmount && total) {
-    const label = [
-      sourceValue(source, ['Charge Category', 'Category', 'Charge Type', 'Breakdown / Description', 'Description']),
-      description
-    ].filter(Boolean).join(' ');
-    const category = /maint|repair|service|parts|labor/.test(label.toLowerCase()) ? 'maintenance' :
-      /ticket|toll/.test(label.toLowerCase()) ? 'ticket' :
-      /lease|rental/.test(label.toLowerCase()) ? 'lease' :
-      /credit/.test(label.toLowerCase()) ? 'credits' :
-      /tax/.test(label.toLowerCase()) ? 'taxRental' : 'uncategorized';
-    categories[category] += total;
-  }
-
+  const hasSourceTotal = totalValue !== '';
   const categoryTotal = Object.values(categories).reduce((sum, value) => sum + value, 0);
-  if (total && (foundCategoryAmount || foundGenericAmount) && Math.abs(total - categoryTotal) >= 0.01) {
-    categories.other += total - categoryTotal;
-  }
-  const calculatedTotal = total || Object.values(categories).reduce((sum, value) => sum + value, 0);
+  const calculatedTotal = hasSourceTotal ? total : categoryTotal;
+  const maintenanceHeaders = Object.entries(source || {})
+    .filter(([header, value]) => elementChargeCategory(header) === 'maintenance' && parseNumeric(value) !== 0)
+    .map(([header]) => header);
+  const maintenanceDescription = maintenanceHeaders.length
+    ? 'Element category: ' + maintenanceHeaders.map(header => header.replace(/\s+\[\d+\]$/, '').trim()).join(', ')
+    : '';
   return {
     vin,
     unit: String(unit || ''),
     clientAssetId: String(clientAssetId || ''),
     description: String(description || ''),
+    maintenanceDescription,
     total: calculatedTotal,
+    categoryTotal,
+    categoryDifference: calculatedTotal - categoryTotal,
     categories,
+    chargeClassifications,
     source
   };
 }
+
+function migrateElementAuditChargeCategories() {
+  let changed = false;
+  const audits = state.elementAudits.concat(Object.values(state.activeElementAuditByClient || {}));
+  audits.forEach(audit => {
+    if (!audit || !Array.isArray(audit.elementRecords)) return;
+    audit.elementRecords.forEach(record => {
+      if (!record || !record.source || !Object.keys(record.source).some(elementChargeCategory)) return;
+      const imported = elementRecordValues(record.source);
+      if (JSON.stringify(record.categories || {}) !== JSON.stringify(imported.categories) ||
+          !Array.isArray(record.chargeClassifications)) {
+        record.categories = imported.categories;
+        record.categoryTotal = imported.categoryTotal;
+        record.categoryDifference = imported.categoryDifference;
+        record.chargeClassifications = imported.chargeClassifications;
+        record.maintenanceDescription = imported.maintenanceDescription || record.maintenanceDescription;
+        changed = true;
+      }
+    });
+  });
+  if (changed) {
+    try {
+      save();
+    } catch (error) {
+      console.error('Unable to persist the Element charge-category migration.', error);
+      alert('Element charge categories were updated for this session but could not be saved in browser storage.');
+    }
+  }
+}
+
+migrateElementAuditChargeCategories();
 
 function elementAuditRecords(audit) {
   return Array.isArray(audit && audit.elementRecords) ? audit.elementRecords : [];
@@ -1358,7 +1696,9 @@ function elementAuditRecords(audit) {
 function elementSummary(audit) {
   return elementAuditRecords(audit).reduce((summary, record) => {
     Object.keys(summary).forEach(key => { summary[key] += record.categories[key] || 0; });
-    summary.total += record.total || 0;
+    summary.total += record.categoryTotal == null
+      ? Object.values(record.categories || {}).reduce((total, amount) => total + (amount || 0), 0)
+      : record.categoryTotal;
     return summary;
   }, { lease: 0, maintenance: 0, ticket: 0, uncategorized: 0, credits: 0, taxRental: 0, other: 0, total: 0 });
 }
@@ -1367,11 +1707,7 @@ function elementSourceInvoiceTotal(audit) {
   if (audit && audit.sourceInvoiceTotal != null && audit.sourceInvoiceTotal !== '') {
     return parseNumeric(audit.sourceInvoiceTotal);
   }
-  const explicitTotals = elementAuditRecords(audit).map(record =>
-    parseNumeric(sourceValue(record.source, ['Invoice Total', 'Invoice Total Amount', 'Grand Total']))
-  ).filter(value => value !== 0);
-  if (explicitTotals.length) return explicitTotals[0];
-  return elementAuditRecords(audit).reduce((total, record) => total + (record.total || 0), 0);
+  return null;
 }
 
 function elementPivot(audit) {
@@ -1383,7 +1719,9 @@ function elementPivot(audit) {
       taxRental: 0, other: 0, total: 0
     };
     Object.keys(record.categories).forEach(key => { row[key] += record.categories[key] || 0; });
-    row.total += record.total || 0;
+    row.total += record.categoryTotal == null
+      ? Object.values(record.categories || {}).reduce((total, amount) => total + (amount || 0), 0)
+      : record.categoryTotal;
     groups.set(vin, row);
   });
   return Array.from(groups.values()).sort((left, right) => left.vin.localeCompare(right.vin));
@@ -1393,8 +1731,10 @@ function elementChargeItems(audit, category) {
   return elementAuditRecords(audit).filter(record => Math.abs(record.categories[category] || 0) >= 0.005)
     .map(record => ({
       vin: record.vin,
-      description: record.description || record.source['Maintenance Description'] ||
-        record.source['Ticket Description'] || record.source['Breakdown'] || '',
+      description: category === 'maintenance'
+        ? (record.maintenanceDescription || 'Element maintenance category')
+        : (record.source['Maintenance Description'] || record.source['Ticket Description'] ||
+          record.description || ''),
       cost: record.categories[category]
     }));
 }
@@ -1404,7 +1744,7 @@ function ensureMaintenanceReviewFromElement(audit) {
   const priorRows = Array.isArray(audit.maintenanceReview) ? audit.maintenanceReview : [];
   const queues = new Map();
   priorRows.forEach(row => {
-    const key = [normalizeVin(row.vin), normalizedElementKey(row.maintenanceDescription), parseNumeric(row.elementCharge)].join('|');
+    const key = [normalizeVin(row.vin), parseNumeric(row.elementCharge)].join('|');
     const queue = queues.get(key) || [];
     queue.push(row);
     queues.set(key, queue);
@@ -1413,21 +1753,21 @@ function ensureMaintenanceReviewFromElement(audit) {
   elementAuditRecords(audit).forEach(record => {
     const charge = record.categories.maintenance || 0;
     if (Math.abs(charge) < 0.005) return;
-    const description = record.source['Maintenance Description'] || record.description || '';
-    const key = [record.vin, normalizedElementKey(description), charge].join('|');
+    const description = record.maintenanceDescription || 'Element maintenance category';
+    const key = [record.vin, charge].join('|');
     const previous = queues.get(key);
-    const row = previous && previous.length ? previous.shift() : null;
-    audit.maintenanceReview.push(row || {
+    const prior = previous && previous.length ? previous.shift() : null;
+    audit.maintenanceReview.push(Object.assign(prior || {}, {
       vin: record.vin,
       unit: record.unit,
       clientAssetId: record.clientAssetId,
       maintenanceDescription: description,
       elementCharge: charge,
-      reviewedAmount: '',
-      difference: '',
-      reviewStatus: 'Pending Review',
-      reviewNotes: ''
-    });
+      reviewedAmount: prior ? prior.reviewedAmount : '',
+      difference: prior ? prior.difference : '',
+      reviewStatus: prior ? prior.reviewStatus : 'Pending Review',
+      reviewNotes: prior ? prior.reviewNotes : ''
+    }));
   });
   return ensureAuditMaintenanceReview(audit);
 }
@@ -1478,7 +1818,10 @@ function elementInvoiceTableHtml(audit) {
         values.map(value => '<td>' + esc(value) + '</td>').join('') +
         '<td><button type="button" class="btn secondary" data-source-detail="' + index + '">View source</button></td></tr>' +
         '<tr class="element-source-detail" data-source-detail-row="' + index + '" data-expanded="false" hidden><td colspan="' + columns.length +
-        '"><pre style="white-space:pre-wrap;margin:0">' + esc(JSON.stringify(record.source, null, 2)) + '</pre></td></tr>';
+        '"><pre style="white-space:pre-wrap;margin:0">' + esc(JSON.stringify({
+          sourceRecord: record.source,
+          chargeCategorization: record.chargeClassifications || []
+        }, null, 2)) + '</pre></td></tr>';
     }).join('') + '</tbody></table></div>';
 }
 
@@ -1542,23 +1885,228 @@ function exportMaintenanceReviewWorkbook() {
     alert('Upload Element invoice data before exporting maintenance review.');
     return;
   }
-  const rows = ensureMaintenanceReviewFromElement(audit).map(row => ({
-    VIN: row.vin || '',
-    Unit: row.unit || '',
-    'Client Asset ID': row.clientAssetId || '',
-    'Maintenance Description': row.maintenanceDescription || '',
-    'Element Charge': row.elementCharge,
-    'Reviewed Amount': '',
-    Difference: '',
-    'Review Status': 'Pending Review',
-    'Review Notes': ''
-  }));
+  const rows = ensureMaintenanceReviewFromElement(audit)
+    .filter(row => normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Pending Review' || row.reviewedAmount === '')
+    .map(row => ({
+      VIN: row.vin || '',
+      Unit: row.unit || '',
+      'Client Asset ID': row.clientAssetId || '',
+      'Maintenance Description': row.maintenanceDescription || '',
+      'Element Charge': row.elementCharge,
+      'Reviewed Amount': '',
+      Difference: '',
+      'Review Status': 'Pending Review',
+      'Review Notes': ''
+    }));
+  if (!rows.length) {
+    alert('There are no pending maintenance charges to export for this audit.');
+    return;
+  }
   const headers = ['VIN', 'Unit', 'Client Asset ID', 'Maintenance Description', 'Element Charge', 'Reviewed Amount', 'Difference', 'Review Status', 'Review Notes'];
   const worksheet = XLSX.utils.json_to_sheet(rows, { header: headers });
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Maintenance Review');
   const fileMonth = String(audit.month || 'Element').replace(/[^a-z0-9_-]+/gi, '-');
   XLSX.writeFile(workbook, fileMonth + '-maintenance-review.xlsx');
+}
+
+function tollReviewTableHtml(audit) {
+  const rows = ensureTollReviewFromElement(audit);
+  if (!rows.length) {
+    return '<p class="muted">No Ticket / Toll charges were identified in the Element invoice data.</p>';
+  }
+  return '<div class="table"><table><thead><tr>' +
+    '<th>VIN</th><th>Unit</th><th>Client Asset ID</th><th>Description</th><th>Element Charge</th>' +
+    '<th>Reviewed Amount</th><th>Difference</th><th>Review Status</th><th>Review Notes</th></tr></thead><tbody>' +
+    rows.map((row, index) => '<tr>' +
+      '<td>' + esc(row.vin || '') + '</td>' +
+      '<td>' + esc(row.unit || '') + '</td>' +
+      '<td>' + esc(row.clientAssetId || '') + '</td>' +
+      '<td>' + esc(row.description || '') + '</td>' +
+      '<td>' + esc(formatMoney(row.elementCharge)) + '</td>' +
+      '<td><input type="number" step="0.01" data-toll-review-field="reviewedAmount" data-index="' + index +
+        '" value="' + esc(row.reviewedAmount == null ? '' : row.reviewedAmount) + '"></td>' +
+      '<td>' + esc(row.difference === '' ? '' : formatMoney(row.difference)) + '</td>' +
+      '<td><select data-toll-review-field="reviewStatus" data-index="' + index + '">' +
+        ['Pending Review', 'Reviewed', 'Approved', 'Disputed'].map(status =>
+          '<option value="' + esc(status) + '"' +
+          (status === normalizeMaintenanceReviewStatus(row.reviewStatus) ? ' selected' : '') + '>' +
+          esc(status) + '</option>'
+        ).join('') + '</select></td>' +
+      '<td><textarea data-toll-review-field="reviewNotes" data-index="' + index +
+        '" rows="2">' + esc(row.reviewNotes || '') + '</textarea></td></tr>'
+    ).join('') + '</tbody></table></div>';
+}
+
+function exportTollReviewWorkbook() {
+  if (typeof XLSX === 'undefined') {
+    throw new Error('The Excel export library is unavailable.');
+  }
+  const audit = currentElementAudit();
+  if (!audit) {
+    alert('Upload Element invoice data before exporting toll review.');
+    return;
+  }
+  const rows = ensureTollReviewFromElement(audit)
+    .filter(row => normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Pending Review' ||
+      row.reviewedAmount === '' || row.reviewedAmount == null)
+    .map(row => ({
+      VIN: row.vin || '',
+      Unit: row.unit || '',
+      'Client Asset ID': row.clientAssetId || '',
+      Description: row.description || '',
+      'Element Charge': row.elementCharge,
+      'Reviewed Amount': '',
+      Difference: '',
+      'Review Status': 'Pending Review',
+      'Review Notes': ''
+    }));
+  if (!rows.length) {
+    alert('There are no pending toll charges to export for this audit.');
+    return;
+  }
+  const headers = ['VIN', 'Unit', 'Client Asset ID', 'Description', 'Element Charge',
+    'Reviewed Amount', 'Difference', 'Review Status', 'Review Notes'];
+  const worksheet = XLSX.utils.json_to_sheet(rows, { header: headers });
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Toll Review');
+  const fileMonth = String(audit.month || 'Element').replace(/[^a-z0-9_-]+/gi, '-');
+  XLSX.writeFile(workbook, fileMonth + '-toll-review.xlsx');
+}
+
+function matchTollReviewRecords(rows) {
+  const audit = currentElementAudit();
+  if (!audit) return [];
+  const reviewRows = ensureTollReviewFromElement(audit);
+  const consumed = new Set();
+  const unmatched = [];
+  rows.forEach(row => {
+    const vin = normalizeVin(row.vin || row.VIN || row['VIN #']);
+    const description = row.description || row.Description || row['Toll Description'] || '';
+    const elementCharge = row.elementCharge == null ? row['Element Charge'] : row.elementCharge;
+    const candidates = reviewRows.map((candidate, index) => ({ candidate, index }))
+      .filter(item => normalizeVin(item.candidate.vin) === vin && !consumed.has(item.index));
+    const amountCandidates = elementCharge == null || String(elementCharge).trim() === ''
+      ? candidates
+      : candidates.filter(item =>
+        Math.abs(parseNumeric(item.candidate.elementCharge) - parseNumeric(elementCharge)) < 0.01
+      );
+    const exactDescription = amountCandidates.filter(item =>
+      normalizedElementKey(item.candidate.description) === normalizedElementKey(description)
+    );
+    const targetMatch = exactDescription.length === 1 ? exactDescription[0]
+      : amountCandidates.length === 1 ? amountCandidates[0]
+        : candidates.length === 1 && (elementCharge == null || String(elementCharge).trim() === '')
+          ? candidates[0]
+          : null;
+    const target = targetMatch && targetMatch.candidate;
+    if (!vin || !target) {
+      unmatched.push(Object.assign({}, row, {
+        vin,
+        description,
+        conflictReason: 'No unique Element Ticket / Toll charge matched this review row.'
+      }));
+      return;
+    }
+    consumed.add(targetMatch.index);
+    const reviewedAmount = row.reviewedAmount == null ? row['Reviewed Amount'] : row.reviewedAmount;
+    const importedStatus = row.reviewStatus || row['Review Status'];
+    const normalizedStatus = importedStatus ? normalizeMaintenanceReviewStatus(importedStatus) : '';
+    const notes = row.reviewNotes == null ? row['Review Notes'] : row.reviewNotes;
+    const conflicts = [];
+    if (reviewedAmount != null && String(reviewedAmount).trim() !== '' &&
+        target.reviewedAmount !== '' &&
+        Math.abs(parseNumeric(target.reviewedAmount) - parseNumeric(reviewedAmount)) >= 0.01) {
+      conflicts.push('Reviewed Amount');
+    }
+    if (normalizedStatus && normalizedStatus !== normalizeMaintenanceReviewStatus(target.reviewStatus) &&
+        normalizeMaintenanceReviewStatus(target.reviewStatus) !== 'Pending Review') {
+      conflicts.push('Review Status');
+    }
+    if (notes != null && String(notes).trim() !== '' && target.reviewNotes &&
+        String(target.reviewNotes) !== String(notes)) {
+      conflicts.push('Review Notes');
+    }
+    if (conflicts.length) {
+      unmatched.push(Object.assign({}, row, {
+        vin,
+        description,
+        conflictReason: 'Existing toll review decision preserved; uploaded ' + conflicts.join(', ') +
+          ' conflicts with the saved record.'
+      }));
+      return;
+    }
+    if (reviewedAmount != null && String(reviewedAmount).trim() !== '') {
+      target.reviewedAmount = reviewedAmount;
+      target.difference = String(roundCurrency(parseNumeric(reviewedAmount) - parseNumeric(target.elementCharge)));
+    }
+    if (normalizedStatus) target.reviewStatus = normalizedStatus;
+    if (notes != null && String(notes).trim() !== '') target.reviewNotes = notes;
+  });
+  audit.unmatchedTollReviewRecords = (audit.unmatchedTollReviewRecords || []).concat(unmatched);
+  save();
+  return unmatched;
+}
+
+function parseTollReviewFile(file) {
+  if (!file) return;
+  const extension = String(file.name || '').split('.').pop().toLowerCase();
+  if (!['csv', 'xlsx', 'xls'].includes(extension)) {
+    alert('Choose a .csv, .xlsx, or .xls file for the completed toll review.');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onerror = () => alert('The completed toll review file could not be read.');
+  reader.onload = event => {
+    try {
+      let rows;
+      if (extension === 'csv') {
+        const parsed = csvRows(String(event.target.result || ''));
+        if (!parsed.length) return;
+        const headers = parsed[0].map(value => String(value || '').trim());
+        rows = parsed.slice(1).map(parsedRow => {
+          const object = {};
+          headers.forEach((header, index) => {
+            object[header] = parsedRow[index] == null ? '' : parsedRow[index];
+          });
+          return object;
+        });
+      } else {
+        const workbook = XLSX.read(event.target.result, { type: 'array' });
+        const sheetName = workbook.SheetNames.find(name => {
+          const values = XLSX.utils.sheet_to_json(workbook.Sheets[name], {
+            header: 1, blankrows: false, defval: ''
+          });
+          return /vin|element charge|reviewed amount|review status/i.test(values.flat().join(' '));
+        }) || workbook.SheetNames[0];
+        rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+      }
+      const normalizedRows = rows.map(row => ({
+        vin: sourceValue(row, ['VIN', 'VIN #', 'VIN Number']),
+        unit: sourceValue(row, ['Unit']),
+        clientAssetId: sourceValue(row, ['Client Asset ID']),
+        description: sourceValue(row, ['Description', 'Toll Description']),
+        elementCharge: sourceValue(row, ['Element Charge']),
+        reviewedAmount: sourceValue(row, ['Reviewed Amount']),
+        difference: sourceValue(row, ['Difference']),
+        reviewStatus: sourceValue(row, ['Review Status']),
+        reviewNotes: sourceValue(row, ['Review Notes'])
+      })).filter(record => Object.values(record).some(value =>
+        String(value == null ? '' : value).trim()
+      ));
+      if (!normalizedRows.length) throw new Error('No toll review records were found.');
+      const unmatched = matchTollReviewRecords(normalizedRows);
+      alert(unmatched.length
+        ? 'Some toll review records did not match or conflicted with an existing decision. They were saved under Unmatched Toll Review Records.'
+        : 'Toll review upload completed for this Element audit.');
+      element();
+    } catch (error) {
+      console.error('Unable to parse completed toll review file.', error);
+      alert('Unable to parse the completed toll review file: ' + error.message);
+    }
+  };
+  if (extension === 'csv') reader.readAsText(file);
+  else reader.readAsArrayBuffer(file);
 }
 
 function matchMaintenanceReviewRecords(rows) {
@@ -1587,12 +2135,16 @@ function matchMaintenanceReviewRecords(rows) {
     }
     const candidates = reviewRows.map((candidate, index) => ({ candidate, index }))
       .filter(item => normalizeVin(item.candidate.vin) === vin && !consumed.has(item.index));
-    const exact = candidates.find(item =>
-      normalizedElementKey(item.candidate.maintenanceDescription) === normalizedElementKey(description) &&
-      (elementCharge == null || elementCharge === '' ||
-        Math.abs(parseNumeric(item.candidate.elementCharge) - parseNumeric(elementCharge)) < 0.01)
+    const hasElementCharge = elementCharge != null && elementCharge !== '';
+    const amountCandidates = hasElementCharge ? candidates.filter(item =>
+      Math.abs(parseNumeric(item.candidate.elementCharge) - parseNumeric(elementCharge)) < 0.01
+    ) : candidates;
+    const exactDescription = amountCandidates.filter(item =>
+      normalizedElementKey(item.candidate.maintenanceDescription) === normalizedElementKey(description)
     );
-    const targetMatch = exact || (candidates.length === 1 ? candidates[0] : null);
+    const targetMatch = exactDescription.length === 1 ? exactDescription[0]
+      : amountCandidates.length === 1 ? amountCandidates[0]
+        : candidates.length === 1 && !hasElementCharge ? candidates[0] : null;
     const target = targetMatch && targetMatch.candidate;
     if (!target) {
       unmatched.push({
@@ -1610,14 +2162,46 @@ function matchMaintenanceReviewRecords(rows) {
     }
     consumed.add(targetMatch.index);
     const reviewedAmount = row.reviewedAmount == null ? row['Reviewed Amount'] : row.reviewedAmount;
-    if (reviewedAmount != null && reviewedAmount !== '') {
+    const importedStatus = row.reviewStatus || row['Review Status'];
+    const normalizedStatus = importedStatus ? normalizeMaintenanceReviewStatus(importedStatus) : '';
+    const notes = row.reviewNotes == null ? row['Review Notes'] : row.reviewNotes;
+    const conflicts = [];
+    if (reviewedAmount != null && String(reviewedAmount).trim() !== '' &&
+        target.reviewedAmount !== '' &&
+        Math.abs(parseNumeric(target.reviewedAmount) - parseNumeric(reviewedAmount)) >= 0.01) {
+      conflicts.push('Reviewed Amount');
+    }
+    if (normalizedStatus && normalizedStatus !== normalizeMaintenanceReviewStatus(target.reviewStatus) &&
+        normalizeMaintenanceReviewStatus(target.reviewStatus) !== 'Pending Review') {
+      conflicts.push('Review Status');
+    }
+    if (notes != null && String(notes).trim() !== '' && target.reviewNotes &&
+        String(target.reviewNotes) !== String(notes)) {
+      conflicts.push('Review Notes');
+    }
+    if (conflicts.length) {
+      unmatched.push({
+        vin,
+        unit: row.unit || row.Unit || target.unit || '',
+        clientAssetId: row.clientAssetId || row['Client Asset ID'] || target.clientAssetId || '',
+        maintenanceDescription: description || target.maintenanceDescription,
+        elementCharge: elementCharge || target.elementCharge,
+        reviewedAmount: reviewedAmount || '',
+        difference: reviewedAmount == null || reviewedAmount === '' ? '' :
+          String(parseNumeric(reviewedAmount) - parseNumeric(target.elementCharge)),
+        reviewStatus: normalizedStatus || '',
+        reviewNotes: notes || '',
+        conflictReason: 'Existing review decision preserved; uploaded ' + conflicts.join(', ') +
+          ' conflicts with the saved record.'
+      });
+      return;
+    }
+    if (reviewedAmount != null && String(reviewedAmount).trim() !== '') {
       target.reviewedAmount = reviewedAmount;
       target.difference = String(parseNumeric(reviewedAmount) - parseNumeric(target.elementCharge));
     }
-    const status = row.reviewStatus || row['Review Status'];
-    if (status) target.reviewStatus = normalizeMaintenanceReviewStatus(status);
-    const notes = row.reviewNotes == null ? row['Review Notes'] : row.reviewNotes;
-    if (notes != null) target.reviewNotes = notes;
+    if (normalizedStatus) target.reviewStatus = normalizedStatus;
+    if (notes != null && String(notes).trim() !== '') target.reviewNotes = notes;
   });
   audit.unmatchedReviewRecords = (audit.unmatchedReviewRecords || []).concat(unmatched);
   save();
@@ -1632,6 +2216,7 @@ function parseMaintenanceReviewFile(file) {
     return;
   }
   const reader = new FileReader();
+  reader.onerror = () => alert('The completed maintenance review file could not be read.');
   reader.onload = event => {
     try {
       let rows;
@@ -1671,7 +2256,7 @@ function parseMaintenanceReviewFile(file) {
       }
       const unmatched = matchMaintenanceReviewRecords(normalizedRows);
       if (unmatched && unmatched.length) {
-        alert('Some maintenance review records did not match a maintenance charge in this Element audit and were saved under Unmatched Review Records.');
+        alert('Some maintenance review records did not match or conflicted with an existing review decision. They were saved under Unmatched Review Records.');
       } else {
         alert('Maintenance review upload completed for this Element audit.');
       }
@@ -1693,24 +2278,60 @@ function parseElementInvoiceFile(file) {
     return;
   }
   const reader = new FileReader();
+  reader.onerror = () => alert('The Element invoice CSV/CDV could not be read.');
   reader.onload = event => {
     try {
       const sourceRows = elementRecordsFromText(String(event.target.result || ''));
       if (!sourceRows.length) throw new Error('The Element file has headers but no invoice records.');
+      const csvInvoiceNumber = String(sourceValue(sourceRows[0], ['Invoice #', 'Invoice Number'])).trim();
+      const csvInvoiceDate = elementInvoiceDate(sourceValue(sourceRows[0], ['Invoice Date']));
+      if (!$('elementInvoiceNumber').value.trim() && csvInvoiceNumber) {
+        $('elementInvoiceNumber').value = csvInvoiceNumber;
+      }
+      if (!$('elementInvoiceDate').value && csvInvoiceDate.iso) {
+        $('elementInvoiceDate').value = csvInvoiceDate.iso;
+      }
+      if (!$('elementAuditMonth').value.trim() && csvInvoiceDate.month) {
+        $('elementAuditMonth').value = csvInvoiceDate.month;
+      }
       const month = $('elementAuditMonth').value.trim();
       const invoiceNumber = $('elementInvoiceNumber').value.trim();
       if (!month || !invoiceNumber) {
-        alert('Enter the Audit Month and Invoice Number before uploading Element invoice data.');
+        alert('Enter the Audit Month and Invoice Number. The invoice date and number can be read from the Element CSV when present.');
         return;
       }
       const clientId = currentClientId;
       const key = elementAuditKey(clientId, month, invoiceNumber);
-      let audit = elementAuditList().find(item =>
+      const activeAudit = currentElementAudit();
+      const existingMonthAudit = elementAuditList().find(item =>
+        elementAuditMonthKey(item.clientId, item.month) === elementAuditMonthKey(clientId, month)
+      );
+      if (existingMonthAudit &&
+          (existingMonthAudit.id !== (activeAudit && activeAudit.id) ||
+           normalizedElementKey(existingMonthAudit.invoiceNumber) !== normalizedElementKey(invoiceNumber))) {
+        if (window.confirm('An audit already exists for this client and month. Open it from Audit History instead of importing over it?')) {
+          changeElementAudit(existingMonthAudit.id);
+        }
+        return;
+      }
+      if (activeAudit && activeAudit.month && activeAudit.invoiceNumber &&
+          elementAuditKey(activeAudit.clientId, activeAudit.month, activeAudit.invoiceNumber) !== key &&
+          elementAuditIsDirty(activeAudit)) {
+        const shouldSave = window.confirm('The active Element audit has unsaved changes. Save it to Audit History before importing another invoice?');
+        if (!shouldSave || !saveCurrentElementAudit(activeAudit, false)) return;
+      }
+      let audit = activeAudit &&
+        (!activeAudit.month || !activeAudit.invoiceNumber ||
+          elementAuditKey(activeAudit.clientId, activeAudit.month, activeAudit.invoiceNumber) === key)
+        ? activeAudit
+        : null;
+      if (!audit) audit = elementAuditList().find(item =>
         elementAuditKey(item.clientId, item.month, item.invoiceNumber) === key
       );
+      if (audit && state.elementAudits.includes(audit)) audit = cloneElementAudit(audit);
       if (!audit) {
         audit = {
-          id: 'element-audit-' + Date.now(),
+          id: createElementAuditId(),
           clientId,
           month,
           invoiceNumber,
@@ -1720,18 +2341,41 @@ function parseElementInvoiceFile(file) {
           maintenanceReview: [],
           unmatchedReviewRecords: []
         };
-        state.elementAudits.push(audit);
       }
       audit.month = month;
       audit.invoiceNumber = invoiceNumber;
-      audit.invoiceDate = $('elementInvoiceDate').value;
+      const client = selectedClient();
+      audit.clientId = clientId;
+      audit.clientName = client.company;
+      audit.shortCode = client.shortCode;
+      audit.station = client.station;
+      const pdfDetailReference = ELEMENT_PDF_DETAIL_REFERENCES[key];
+      if ((audit.pdfMaintenanceDetailTotal == null || audit.pdfMaintenanceDetailTotal === '') &&
+          pdfDetailReference) {
+        audit.pdfMaintenanceDetailTotal = String(pdfDetailReference.total);
+        audit.pdfMaintenanceDetailSource = pdfDetailReference.source;
+      }
+      const invoiceDate = $('elementInvoiceDate').value;
+      if (invoiceDate || !audit.invoiceDate) audit.invoiceDate = invoiceDate;
       audit.elementRecords = sourceRows.map(elementRecordValues);
-      const importedTotal = sourceValue(sourceRows[0], ['Invoice Total', 'Invoice Total Amount', 'Grand Total']);
-      audit.sourceInvoiceTotal = $('elementInvoiceTotal').value || importedTotal || '';
+      const invoiceTotal = $('elementInvoiceTotal').value.trim();
+      if (invoiceTotal || !audit.sourceInvoiceTotal) audit.sourceInvoiceTotal = invoiceTotal;
+      audit.csvFileName = file.name;
+      audit.csvFileSize = file.size;
+      audit.csvImportedAt = new Date().toISOString();
+      state.activeElementAuditByClient = state.activeElementAuditByClient || {};
+      state.activeElementAuditByClient[clientId] = audit;
       state.selectedElementAuditByClient = state.selectedElementAuditByClient || {};
       state.selectedElementAuditByClient[clientId] = audit.id;
       ensureMaintenanceReviewFromElement(audit);
-      save();
+      ensureTollReviewFromElement(audit);
+      try {
+        save();
+      } catch (error) {
+        console.error('Unable to save imported Element invoice data in browser storage.', error);
+        alert('The Element CSV was parsed, but its active workspace could not be saved in browser storage. Export a backup and check available storage.');
+        return;
+      }
       alert('Imported ' + audit.elementRecords.length + ' Element invoice records for ' + month + ' / ' + invoiceNumber + '.');
       element();
     } catch (error) {
@@ -1750,13 +2394,49 @@ function attachElementInvoicePdf(file) {
   }
   const audit = currentElementAudit();
   if (!audit) {
-    alert('Save the audit month and invoice number before attaching the Element PDF.');
+    alert('Enter an audit month and invoice number before attaching the Element PDF.');
     return;
   }
-  audit.invoicePdfName = file.name;
-  audit.invoicePdfSize = file.size;
-  save();
-  element();
+  if (file.size > 2 * 1024 * 1024) {
+    alert('The PDF is larger than the 2 MB browser-storage limit for this prototype.');
+    return;
+  }
+  const auditId = audit.id;
+  const reader = new FileReader();
+  reader.onerror = () => alert('The selected Element invoice PDF could not be read.');
+  reader.onload = event => {
+    const target = currentElementAudit();
+    if (!target) {
+      alert('The active Element audit is no longer available. Select it again and attach the PDF.');
+      return;
+    }
+    if (target.id !== auditId) {
+      alert('The active Element audit changed while the PDF was being read. Attach it again.');
+      return;
+    }
+    const previousAttachment = {
+      name: target.invoicePdfName,
+      size: target.invoicePdfSize,
+      dataUrl: target.invoicePdfDataUrl
+    };
+    target.invoicePdfName = file.name;
+    target.invoicePdfSize = file.size;
+    target.invoicePdfDataUrl = String(event.target.result || '');
+    try {
+      save();
+      element();
+    } catch (error) {
+      if (previousAttachment.name == null) delete target.invoicePdfName;
+      else target.invoicePdfName = previousAttachment.name;
+      if (previousAttachment.size == null) delete target.invoicePdfSize;
+      else target.invoicePdfSize = previousAttachment.size;
+      if (previousAttachment.dataUrl == null) delete target.invoicePdfDataUrl;
+      else target.invoicePdfDataUrl = previousAttachment.dataUrl;
+      console.error('Unable to save the Element invoice PDF attachment.', error);
+      alert('The Element invoice PDF could not be saved in browser storage.');
+    }
+  };
+  reader.readAsDataURL(file);
 }
 
 function saveElementAuditDetails() {
@@ -1767,15 +2447,9 @@ function saveElementAuditDetails() {
     return;
   }
   let audit = currentElementAudit();
-  const key = elementAuditKey(currentClientId, month, invoiceNumber);
-  const matching = elementAuditList().find(item =>
-    elementAuditKey(item.clientId, item.month, item.invoiceNumber) === key
-  );
-  audit = matching || audit;
-  if (!audit || (audit.month && audit.invoiceNumber &&
-      elementAuditKey(audit.clientId, audit.month, audit.invoiceNumber) !== key)) {
+  if (!audit) {
     audit = {
-      id: 'element-audit-' + Date.now(),
+      id: createElementAuditId(),
       clientId: currentClientId,
       month,
       invoiceNumber,
@@ -1785,22 +2459,337 @@ function saveElementAuditDetails() {
       maintenanceReview: [],
       unmatchedReviewRecords: []
     };
-    state.elementAudits.push(audit);
   }
   audit.month = month;
   audit.invoiceNumber = invoiceNumber;
   audit.invoiceDate = $('elementInvoiceDate').value;
-  audit.sourceInvoiceTotal = $('elementInvoiceTotal').value;
+  audit.sourceInvoiceTotal = $('elementInvoiceTotal').value.trim();
+  const previousPdfDetailTotal = audit.pdfMaintenanceDetailTotal == null
+    ? ''
+    : String(audit.pdfMaintenanceDetailTotal);
+  audit.pdfMaintenanceDetailTotal = $('pdfMaintenanceDetailTotal')
+    ? $('pdfMaintenanceDetailTotal').value.trim()
+    : audit.pdfMaintenanceDetailTotal || '';
+  if (audit.pdfMaintenanceDetailTotal && audit.pdfMaintenanceDetailTotal !== previousPdfDetailTotal) {
+    audit.pdfMaintenanceDetailSource = 'Entered by fleet team for source verification.';
+  }
+  audit.clientId = currentClientId;
+  audit.clientId = currentClientId;
+  const client = selectedClient();
+  audit.clientName = client.company;
+  audit.shortCode = client.shortCode;
+  state.activeElementAuditByClient = state.activeElementAuditByClient || {};
+  state.activeElementAuditByClient[currentClientId] = audit;
   state.selectedElementAuditByClient = state.selectedElementAuditByClient || {};
   state.selectedElementAuditByClient[currentClientId] = audit.id;
-  save();
+  if (!saveCurrentElementAudit(audit)) return;
   element();
 }
 
+function elementAuditHasDraftContent(audit) {
+  if (!audit) return false;
+  return Boolean(
+    String(audit.month || '').trim() ||
+    String(audit.invoiceNumber || '').trim() ||
+    String(audit.invoiceDate || '').trim() ||
+    String(audit.sourceInvoiceTotal || '').trim() ||
+    String(audit.invoicePdfName || '').trim() ||
+    String(audit.invoicePdfDataUrl || '').trim() ||
+    String(audit.csvFileName || '').trim() ||
+    (Array.isArray(audit.elementRecords) && audit.elementRecords.length) ||
+    (Array.isArray(audit.maintenanceReview) && audit.maintenanceReview.length) ||
+    (Array.isArray(audit.tollReview) && audit.tollReview.length) ||
+    (Array.isArray(audit.unmatchedReviewRecords) && audit.unmatchedReviewRecords.length) ||
+    (Array.isArray(audit.unmatchedTollReviewRecords) && audit.unmatchedTollReviewRecords.length)
+  );
+}
+
+function createEmptyElementAuditDraft(month = '') {
+  const client = selectedClient();
+  return {
+    id: createElementAuditId(),
+    clientId: currentClientId,
+    clientName: client.company,
+    shortCode: client.shortCode,
+    station: client.station,
+    month,
+    invoiceNumber: '',
+    invoiceDate: '',
+    sourceInvoiceTotal: '',
+    pdfMaintenanceDetailTotal: '',
+    elementRecords: [],
+    maintenanceReview: [],
+    tollReview: [],
+    unmatchedReviewRecords: [],
+    unmatchedTollReviewRecords: [],
+    createdAt: new Date().toISOString()
+  };
+}
+
+function startNewElementAudit() {
+  const current = currentElementAudit();
+  if (elementAuditHasDraftContent(current)) {
+    if (!current.invoiceNumber || !current.invoiceDate || !current.month) {
+      alert('Complete the current audit month, invoice number, and invoice date before archiving it.');
+      return;
+    }
+    if (!saveCurrentElementAudit(current)) return;
+  }
+  const month = window.prompt('Enter the new audit month (for example, November 2026):');
+  if (month == null || !month.trim()) return;
+  const client = selectedClient();
+  const existingAudit = elementAuditList().find(item =>
+    elementAuditMonthKey(item.clientId, item.month) ===
+      elementAuditMonthKey(currentClientId, month)
+  );
+  if (existingAudit) {
+    if (window.confirm('An audit already exists for ' + client.company + ' in ' + month.trim() +
+        '. Open that saved audit instead of creating or replacing it?')) {
+      changeElementAudit(existingAudit.id);
+    }
+    return;
+  }
+  if (!window.confirm('Archive the current audit and start a clean Element audit for ' +
+      client.company + ', ' + month.trim() + '? The current month will be saved in Audit History; ' +
+      'the new draft will not carry over charges, files, or review entries.')) {
+    return;
+  }
+  const previous = current;
+  const previousSelectedAuditId = state.selectedElementAuditByClient &&
+    state.selectedElementAuditByClient[currentClientId];
+  const audit = createEmptyElementAuditDraft(month.trim());
+  state.activeElementAuditByClient = state.activeElementAuditByClient || {};
+  state.activeElementAuditByClient[currentClientId] = audit;
+  state.selectedElementAuditByClient = state.selectedElementAuditByClient || {};
+  state.selectedElementAuditByClient[currentClientId] = audit.id;
+  try {
+    save();
+  } catch (error) {
+    if (previous) state.activeElementAuditByClient[currentClientId] = previous;
+    else delete state.activeElementAuditByClient[currentClientId];
+    if (previousSelectedAuditId) state.selectedElementAuditByClient[currentClientId] = previousSelectedAuditId;
+    else delete state.selectedElementAuditByClient[currentClientId];
+    console.error('Unable to save the new Element audit workspace in browser storage.', error);
+    alert('The new Element audit workspace could not be saved in browser storage. The prior workspace was retained.');
+    return;
+  }
+  element();
+}
+
+function clearCurrentElementDraft() {
+  const current = currentElementAudit();
+  if (!current) {
+    alert('There is no active Element draft to clear.');
+    return;
+  }
+  const savedAudit = state.elementAudits.find(audit => audit.id === current.id);
+  if (savedAudit) {
+    if (!window.confirm('This audit is saved in Audit History and will not be deleted. Discard only unsaved changes and reload the saved audit?')) {
+      return;
+    }
+    state.activeElementAuditByClient[currentClientId] = cloneElementAudit(savedAudit);
+    try {
+      save();
+    } catch (error) {
+      state.activeElementAuditByClient[currentClientId] = current;
+      console.error('Unable to reload the saved Element audit.', error);
+      alert('The saved audit remains intact, but the active workspace could not be reloaded.');
+      return;
+    }
+    element();
+    return;
+  }
+  const warning = elementAuditHasDraftContent(current)
+    ? 'This will discard unsaved Element data, review entries, and any active draft file references. Saved Audit History will not be affected. Continue?'
+    : 'Reset the active Element form? Saved Audit History will not be affected.';
+  if (!window.confirm(warning)) return;
+  const previousSelectedAuditId = state.selectedElementAuditByClient &&
+    state.selectedElementAuditByClient[currentClientId];
+  state.activeElementAuditByClient[currentClientId] = createEmptyElementAuditDraft();
+  if (state.selectedElementAuditByClient) delete state.selectedElementAuditByClient[currentClientId];
+  try {
+    save();
+  } catch (error) {
+    state.activeElementAuditByClient[currentClientId] = current;
+    if (previousSelectedAuditId) {
+      state.selectedElementAuditByClient[currentClientId] = previousSelectedAuditId;
+    }
+    console.error('Unable to clear the active Element draft.', error);
+    alert('The active Element draft could not be cleared in browser storage. Existing data was retained.');
+    return;
+  }
+  element();
+}
+
+function elementMaintenanceVariance(audit) {
+  if (!audit) return null;
+  const reference = ELEMENT_PDF_DETAIL_REFERENCES[
+    elementAuditKey(audit.clientId, audit.month, audit.invoiceNumber)
+  ];
+  const rawPdfDetailTotal = audit.pdfMaintenanceDetailTotal == null || audit.pdfMaintenanceDetailTotal === ''
+    ? reference && reference.total
+    : audit.pdfMaintenanceDetailTotal;
+  if (rawPdfDetailTotal == null || rawPdfDetailTotal === '') return null;
+  const csvTotal = elementSummary(audit).maintenance;
+  const pdfDetailTotal = parseNumeric(rawPdfDetailTotal);
+  return {
+    csvTotal,
+    pdfDetailTotal,
+    difference: roundCurrency(pdfDetailTotal - csvTotal),
+    source: audit.pdfMaintenanceDetailSource || (reference && reference.source) || ''
+  };
+}
+
+function retainElementMaintenanceVerification(audit) {
+  const variance = elementMaintenanceVariance(audit);
+  audit.pdfMaintenanceDetailTotal = variance ? String(variance.pdfDetailTotal) : '';
+  audit.pdfMaintenanceDetailSource = variance ? variance.source : '';
+  audit.maintenanceDetailDifference = variance ? variance.difference : null;
+  audit.maintenanceDetailStatus = variance && Math.abs(variance.difference) >= 0.01
+    ? 'Unresolved variance'
+    : variance ? 'Matched' : 'Not compared';
+}
+
+function elementReviewCompletionStatus(rows) {
+  if (!rows.length) return 'No review items';
+  const pending = rows.filter(row =>
+    normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Pending Review' ||
+    row.reviewedAmount == null || row.reviewedAmount === ''
+  ).length;
+  return pending ? 'Pending (' + pending + '/' + rows.length + ')' : 'Complete';
+}
+
+function elementAuditHistoryHtml() {
+  const audits = elementAuditList().slice().sort((left, right) =>
+    String(right.updatedAt || right.createdAt || '').localeCompare(String(left.updatedAt || left.createdAt || ''))
+  );
+  const rows = audits.map(audit => {
+    const reconciliation = elementAuditReconciliation(audit);
+    const maintenanceStatus = elementReviewCompletionStatus(ensureMaintenanceReviewFromElement(audit));
+    const tollStatus = elementReviewCompletionStatus(ensureTollReviewFromElement(audit));
+    const client = state.clients.find(item => item.id === audit.clientId);
+    return '<tr><td>' + esc((client && client.shortCode) || audit.shortCode || '') + ' — ' +
+      esc((client && client.company) || audit.clientName || '') + '</td><td>' + esc(audit.month || '') +
+      '</td><td>' + esc(audit.invoiceNumber || '') + '</td><td>' + esc(audit.invoiceDate || '') + '</td><td>' +
+      esc(reconciliation.invoiceTotal == null ? 'Not entered' : formatMoney(reconciliation.invoiceTotal)) +
+      '</td><td>' + esc(formatMoney(reconciliation.calculatedTotal)) + '</td><td>' +
+      esc(reconciliation.difference == null ? '—' : formatMoney(reconciliation.difference)) +
+      '</td><td>' + esc(reconciliation.status) + '</td><td>' + esc(maintenanceStatus) + '</td><td>' +
+      esc(tollStatus) + '</td><td><button type="button" class="btn secondary" data-open-element-audit="' +
+      esc(audit.id) + '">Open</button></td></tr>';
+  }).join('');
+  return '<div class="panel" id="elementAuditHistory" style="margin-top:14px"><h2>Audit History</h2>' +
+    '<p class="muted">Saved audits are stored in this browser only; local history is not shared with other team members or synced across computers. Use Export Backup to retain a portable copy. Attached PDFs are included only when saved in browser storage and the backup.</p>' +
+    '<div class="toolbar"><button type="button" class="btn secondary" id="exportElementAuditBackup">Export Backup</button>' +
+    '<button type="button" class="btn secondary" id="restoreElementAuditBackup">Restore Backup</button>' +
+    '<input id="elementAuditBackupFile" type="file" accept=".json,application/json" hidden></div>' +
+    (rows ? '<div class="table"><table><thead><tr><th>Client</th><th>Audit Month</th><th>Invoice Number</th><th>Invoice Date</th><th>Invoice Total</th><th>Calculated CSV Total</th><th>Difference</th><th>Reconciliation</th><th>Maintenance Review</th><th>Toll Review</th><th>Action</th></tr></thead><tbody>' +
+      rows + '</tbody></table></div>' : '<p class="muted">No saved audits for this client yet.</p>') + '</div>';
+}
+
+function exportElementAuditBackup() {
+  const payload = {
+    format: 'FleetAuditHubElementAuditBackup',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    audits: state.elementAudits.map(cloneElementAudit),
+    activeWorkspaces: Object.fromEntries(Object.entries(state.activeElementAuditByClient || {})
+      .map(([clientId, audit]) => [clientId, cloneElementAudit(audit)]))
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'fleet-audit-element-backup-' + new Date().toISOString().slice(0, 10) + '.json';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function restoreElementAuditBackup(file) {
+  if (!file) return;
+  const previousAudits = state.elementAudits.slice();
+  const previousWorkspaces = Object.assign({}, state.activeElementAuditByClient || {});
+  const reader = new FileReader();
+  reader.onerror = () => alert('The selected Element audit backup could not be read.');
+  reader.onload = event => {
+    try {
+      const backup = JSON.parse(String(event.target.result || ''));
+      if (backup.format !== 'FleetAuditHubElementAuditBackup' || !Array.isArray(backup.audits)) {
+        throw new Error('This file is not a supported Fleet Audit Hub Element audit backup.');
+      }
+      const existingIds = new Set(state.elementAudits.map(audit => audit.id));
+      const existingKeys = new Set(state.elementAudits.map(audit =>
+        elementAuditMonthKey(audit.clientId, audit.month)
+      ));
+      let restored = 0;
+      let skipped = 0;
+      backup.audits.forEach(audit => {
+        if (!audit || !audit.id || !audit.clientId || !audit.month || !audit.invoiceNumber ||
+            !Array.isArray(audit.elementRecords)) {
+          skipped++;
+          return;
+        }
+        const key = elementAuditMonthKey(audit.clientId, audit.month);
+        if (existingIds.has(audit.id) || existingKeys.has(key)) {
+          skipped++;
+          return;
+        }
+        state.elementAudits.push(cloneElementAudit(audit));
+        existingIds.add(audit.id);
+        existingKeys.add(key);
+        restored++;
+      });
+      state.activeElementAuditByClient = state.activeElementAuditByClient || {};
+      Object.entries(backup.activeWorkspaces || {}).forEach(([clientId, audit]) => {
+        if (audit && audit.clientId === clientId && !state.activeElementAuditByClient[clientId]) {
+          state.activeElementAuditByClient[clientId] = cloneElementAudit(audit);
+        }
+      });
+      save();
+      alert('Backup restore complete. Added ' + restored + ' saved audit(s); skipped ' + skipped +
+        ' duplicate or invalid record(s). Existing app data was preserved.');
+      element();
+    } catch (error) {
+      state.elementAudits = previousAudits;
+      state.activeElementAuditByClient = previousWorkspaces;
+      console.error('Unable to restore Element audit backup.', error);
+      alert('Unable to restore backup: ' + error.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
 function changeElementAudit(auditId) {
+  const current = currentElementAudit();
+  if (current && elementAuditIsDirty(current)) {
+    const hasRequiredMetadata = String(current.month || '').trim() &&
+      String(current.invoiceNumber || '').trim() && String(current.invoiceDate || '').trim();
+    if (hasRequiredMetadata) {
+      const shouldSave = window.confirm('The active Element audit has unsaved changes. Save it to Audit History before opening another audit?');
+      if (!shouldSave || !saveCurrentElementAudit(current, false)) return;
+    } else if (elementAuditHasDraftContent(current) &&
+        !window.confirm('The active draft is incomplete and cannot be archived yet. Discard this active draft and open the saved audit?')) {
+      return;
+    }
+  }
+  const audit = elementAuditList().find(item => item.id === auditId);
+  if (!audit) {
+    alert('The selected saved audit could not be found for this client.');
+    return;
+  }
+  state.activeElementAuditByClient = state.activeElementAuditByClient || {};
+  state.activeElementAuditByClient[currentClientId] = cloneElementAudit(audit);
   state.selectedElementAuditByClient = state.selectedElementAuditByClient || {};
   state.selectedElementAuditByClient[currentClientId] = auditId;
-  save();
+  try {
+    save();
+  } catch (error) {
+    console.error('Unable to persist the selected Element audit workspace.', error);
+    alert('The selected audit is open, but its workspace selection could not be saved in browser storage.');
+    return;
+  }
   element();
 }
 
@@ -1860,6 +2849,7 @@ function deliverableHtml(audit) {
   return '<div class="cards">' + categoryCards.map(([label, value]) =>
     '<div class="card"><div class="muted">' + esc(label) + '</div><div class="num">' + esc(formatMoney(value)) + '</div></div>'
   ).join('') + '</div>' +
+    elementReconciliationHtml(audit, false) +
     deliverableCategoryHtml(audit, 'maintenance', 'Maintenance Charges') +
     deliverableCategoryHtml(audit, 'ticket', 'Ticket / Toll') +
     deliverableCategoryHtml(audit, 'uncategorized', 'Uncategorized Charges') +
@@ -1874,13 +2864,30 @@ function deliverableHtml(audit) {
 }
 
 function clientReportHtml(audit) {
-  const client = selectedClient();
+  const selected = selectedClient();
+  const client = {
+    company: audit.clientName || selected.company,
+    shortCode: audit.shortCode || selected.shortCode,
+    station: audit.station || selected.station
+  };
   const totals = elementSummary(audit);
   const sourceTotal = elementSourceInvoiceTotal(audit);
   const calculatedTotal = totals.total;
-  const difference = calculatedTotal - sourceTotal;
+  const difference = sourceTotal == null ? null : calculatedTotal - sourceTotal;
+  const maintenanceVariance = elementMaintenanceVariance(audit);
   const maintenanceSummary = maintenanceReviewSummary(audit);
   const review = maintenanceDeliverableSummary(audit);
+  const tollSummary = tollReviewSummary(audit);
+  const tollRows = ensureTollReviewFromElement(audit);
+  const missingInformation = [];
+  if (!audit.month) missingInformation.push('Audit month');
+  if (!audit.invoiceNumber) missingInformation.push('Invoice number');
+  if (!audit.invoiceDate) missingInformation.push('Invoice date');
+  if (sourceTotal == null) missingInformation.push('Element invoice total');
+  if (!elementAuditRecords(audit).length) missingInformation.push('Element invoice CSV/CDV records');
+  const auditStatus = sourceTotal == null
+    ? 'Missing invoice total'
+    : Math.abs(difference) < 0.01 ? 'Balanced' : 'Variance';
   const pivot = elementPivot(audit);
   const pivotRows = pivot.map(row => '<tr><td>' + esc(row.vin) + '</td>' +
     [row.ticket, row.lease, row.maintenance, row.uncategorized, row.credits, row.taxRental, row.other, row.total]
@@ -1899,7 +2906,7 @@ function clientReportHtml(audit) {
     '<h1>Element Invoice Audit</h1><p><strong>Client:</strong> ' + esc(client.company) + '<br><strong>Short Code:</strong> ' + esc(client.shortCode) +
     '<br><strong>Station:</strong> ' + esc(client.station) + '<br><strong>Audit Month:</strong> ' + esc(audit.month) +
     '<br><strong>Invoice Number:</strong> ' + esc(audit.invoiceNumber) + '<br><strong>Invoice Date:</strong> ' + esc(audit.invoiceDate) +
-    '<br><strong>Invoice Total:</strong> ' + esc(formatMoney(sourceTotal)) + '</p>' +
+    '<br><strong>Invoice Total:</strong> ' + esc(sourceTotal == null ? 'MISSING — enter the total from the Element invoice PDF' : formatMoney(sourceTotal)) + '</p>' +
     '<h2>Element Invoice Charges Summary</h2><div class="summary">' +
     [['Lease Charges', totals.lease], ['Maintenance Charges', totals.maintenance], ['Uncategorized Charges', totals.uncategorized],
       ['Ticket / Toll', totals.ticket], ['Credits', totals.credits], ['Tax Rental', totals.taxRental],
@@ -1923,15 +2930,41 @@ function clientReportHtml(audit) {
       '</td><td>' + esc(row.difference === '' ? '' : formatMoney(row.difference)) +
       '</td><td>' + esc(row.reviewStatus) + '</td><td>' + esc(row.reviewNotes) + '</td></tr>').join('') :
       '<tr><td colspan="7">No maintenance charges.</td></tr>') + '</tbody></table>' +
+    '<h2>Toll Review Summary</h2>' +
+    (tollRows.some(row => normalizeMaintenanceReviewStatus(row.reviewStatus) === 'Pending Review' ||
+      row.reviewedAmount === '' || row.reviewedAmount == null)
+      ? '<p><strong>Toll Review Pending</strong></p>' : '') +
+    '<p>Element Toll Billed: ' + esc(formatMoney(tollSummary.billed)) +
+    ' | Reviewed Amount: ' + esc(formatMoney(tollSummary.reviewed)) +
+    ' | Approved: ' + esc(formatMoney(tollSummary.approved)) +
+    ' | Pending Review: ' + esc(formatMoney(tollSummary.pending)) +
+    ' | Disputed: ' + esc(formatMoney(tollSummary.disputed)) +
+    ' | Total Difference: ' + esc(formatMoney(tollSummary.difference)) + '</p>' +
+    '<h3>Toll Review Details</h3><table><thead><tr><th>VIN</th><th>Unit</th><th>Client Asset ID</th>' +
+    '<th>Description</th><th>Element Charge</th><th>Reviewed Amount</th><th>Difference</th><th>Status</th><th>Notes</th></tr></thead><tbody>' +
+    (tollRows.length ? tollRows.map(row => '<tr><td>' + esc(row.vin) + '</td><td>' + esc(row.unit) +
+      '</td><td>' + esc(row.clientAssetId) + '</td><td>' + esc(row.description) +
+      '</td><td>' + esc(formatMoney(row.elementCharge)) + '</td><td>' +
+      esc(row.reviewedAmount === '' || row.reviewedAmount == null ? '' : formatMoney(row.reviewedAmount)) +
+      '</td><td>' + esc(row.difference === '' ? '' : formatMoney(row.difference)) +
+      '</td><td>' + esc(row.reviewStatus) + '</td><td>' + esc(row.reviewNotes) + '</td></tr>').join('') :
+      '<tr><td colspan="9">No Element Ticket / Toll charges.</td></tr>') + '</tbody></table>' +
     detailTable('Ticket / Toll Details', 'ticket') +
     detailTable('Uncategorized Charges', 'uncategorized') +
     detailTable('Credits', 'credits') +
     detailTable('Other Charges', 'other') +
     '<h2>Element Invoice Reconciliation</h2><p>Calculated Element Total: ' + esc(formatMoney(calculatedTotal)) +
-    '<br>Element Invoice Total: ' + esc(formatMoney(sourceTotal)) +
-    '<br>Difference: ' + esc(formatMoney(difference)) +
-    '<br>Audit Status: ' + esc(Math.abs(difference) < 0.01 ? 'Balanced' : 'Variance') +
-    '</p></body></html>';
+    '<br>Element Invoice Total: ' + esc(sourceTotal == null ? 'MISSING' : formatMoney(sourceTotal)) +
+    '<br>Difference: ' + esc(difference == null ? 'Not calculated — invoice total is missing' : formatMoney(difference)) +
+    '<br>Audit Status: ' + esc(auditStatus) + '</p>' +
+    (maintenanceVariance ? '<h2>Maintenance Source Verification</h2><p>CSV maintenance category: ' +
+      esc(formatMoney(maintenanceVariance.csvTotal)) + '<br>PDF maintenance detail total: ' +
+      esc(formatMoney(maintenanceVariance.pdfDetailTotal)) + '<br>Difference (PDF − CSV): ' +
+      esc(formatMoney(maintenanceVariance.difference)) +
+      '<br>' + esc(maintenanceVariance.source) +
+      '<br>This source-level variance is unresolved and does not change billed or reviewed amounts.</p>' : '') +
+    (missingInformation.length ? '<div class="notice"><strong>Missing information:</strong> ' + esc(missingInformation.join(', ')) + '</div>' : '') +
+    '</body></html>';
 }
 
 function generateClientReport() {
@@ -1950,29 +2983,94 @@ function generateClientReport() {
   reportWindow.document.close();
 }
 
+function syncElementAuditDraft() {
+  const month = $('elementAuditMonth').value.trim();
+  const invoiceNumber = $('elementInvoiceNumber').value.trim();
+  let audit = currentElementAudit();
+  if (!audit && !month && !invoiceNumber) return;
+  if (!audit) {
+    const client = selectedClient();
+    audit = {
+      id: createElementAuditId(),
+      clientId: currentClientId,
+      clientName: client.company,
+      shortCode: client.shortCode,
+      month: '',
+      invoiceNumber: '',
+      invoiceDate: '',
+      sourceInvoiceTotal: '',
+      pdfMaintenanceDetailTotal: '',
+      elementRecords: [],
+      maintenanceReview: [],
+      unmatchedReviewRecords: []
+    };
+    state.activeElementAuditByClient = state.activeElementAuditByClient || {};
+    state.activeElementAuditByClient[currentClientId] = audit;
+  }
+  audit.month = month;
+  audit.invoiceNumber = invoiceNumber;
+  audit.invoiceDate = $('elementInvoiceDate').value;
+  audit.sourceInvoiceTotal = $('elementInvoiceTotal').value.trim();
+  const previousPdfDetailTotal = audit.pdfMaintenanceDetailTotal == null
+    ? ''
+    : String(audit.pdfMaintenanceDetailTotal);
+  audit.pdfMaintenanceDetailTotal = $('pdfMaintenanceDetailTotal')
+    ? $('pdfMaintenanceDetailTotal').value.trim()
+    : audit.pdfMaintenanceDetailTotal || '';
+  if (audit.pdfMaintenanceDetailTotal && audit.pdfMaintenanceDetailTotal !== previousPdfDetailTotal) {
+    audit.pdfMaintenanceDetailSource = 'Entered by fleet team for source verification.';
+  }
+  try {
+    save();
+  } catch (error) {
+    console.error('Unable to save the active Element audit workspace.', error);
+    alert('The active Element audit could not be saved in browser storage. Export a backup and check available browser storage.');
+  }
+  const reconciliationPanel = $('elementReconciliation');
+  if (reconciliationPanel) {
+    reconciliationPanel.innerHTML = elementReconciliationHtml(audit);
+    const maintenanceDetailInput = $('pdfMaintenanceDetailTotal');
+    if (maintenanceDetailInput) maintenanceDetailInput.addEventListener('change', syncElementAuditDraft);
+  }
+}
+
 function element() {
   setTitle('Element Invoice Audit', 'Audit only the records and charges contained in the Element invoice.');
   const audits = elementAuditList();
   const audit = currentElementAudit();
   if (audit) ensureMaintenanceReviewFromElement(audit);
+  if (audit) ensureTollReviewFromElement(audit);
   const reviewSummary = audit ? maintenanceReviewSummary(audit) : { totalCharges: 0, pending: 0, reviewed: 0, approved: 0, disputed: 0, totalDifference: 0 };
+  const tollSummary = audit ? tollReviewSummary(audit) : {
+    billed: 0, reviewed: 0, approved: 0, pending: 0, disputed: 0, difference: 0
+  };
   const selectedAuditId = audit && audit.id;
+  const savedAuditIds = new Set(audits.map(item => item.id));
   $('content').innerHTML =
     '<div class="panel"><h2>1. ELEMENT INVOICE</h2>' +
-    '<div class="toolbar">' + (audits.length ? '<label>Client audit <select id="elementAuditSelect">' +
+    '<div class="toolbar"><button type="button" class="btn" id="saveElementAudit">Save Audit</button>' +
+    '<button type="button" class="btn secondary" id="startNewElementAudit">Archive &amp; Start New Month</button>' +
+    '<button type="button" class="btn secondary" id="clearCurrentElementDraft">Clear Current Draft</button>' +
+    '<button type="button" class="btn secondary" id="showElementAuditHistory">Audit History</button>' +
+    (audits.length ? '<label>Saved audit <select id="elementAuditSelect">' +
+      (audit && !savedAuditIds.has(audit.id) ? '<option value="' + esc(audit.id) + '" selected>' +
+        esc((audit.month || 'Untitled') + ' — ' + (audit.invoiceNumber || 'No invoice') + ' (Draft)') + '</option>' : '') +
       audits.map(item => '<option value="' + esc(item.id) + '"' + (item.id === selectedAuditId ? ' selected' : '') + '>' +
         esc(item.month + ' — ' + item.invoiceNumber) + '</option>').join('') + '</select></label>' : '') +
     '<div class="field"><label>Audit Month</label><input id="elementAuditMonth" value="' + esc(audit && audit.month || '') + '" placeholder="October 2026"></div>' +
     '<div class="field"><label>Invoice Number</label><input id="elementInvoiceNumber" value="' + esc(audit && audit.invoiceNumber || '') + '"></div>' +
     '<div class="field"><label>Invoice Date</label><input id="elementInvoiceDate" type="date" value="' + esc(audit && audit.invoiceDate || '') + '"></div>' +
-    '<div class="field"><label>Invoice Total (source)</label><input id="elementInvoiceTotal" type="number" step="0.01" value="' +
-      esc(audit && audit.sourceInvoiceTotal != null && audit.sourceInvoiceTotal !== '' ? audit.sourceInvoiceTotal : (audit ? elementSourceInvoiceTotal(audit) : '')) + '"></div>' +
-    '<button type="button" class="btn secondary" id="saveElementAuditDetails">Save Audit Details</button></div>' +
+    '<div class="field"><label>Invoice Total (from Element PDF)</label><input id="elementInvoiceTotal" type="number" step="0.01" value="' +
+      esc(audit && audit.sourceInvoiceTotal != null ? audit.sourceInvoiceTotal : '') + '"></div>' +
+    '</div>' +
     '<div class="drop" style="margin-bottom:12px">Element PDF invoice<br><input id="elementInvoicePdf" type="file" accept=".pdf,application/pdf">' +
-    (audit && audit.invoicePdfName ? '<div class="small">Attached to this audit: ' + esc(audit.invoicePdfName) + '</div>' : '') +
+    (audit && audit.invoicePdfName ? '<div class="small">Attached to this audit: ' + esc(audit.invoicePdfName) +
+      (audit.invoicePdfDataUrl ? ' <a href="' + esc(audit.invoicePdfDataUrl) + '" download="' + esc(audit.invoicePdfName) + '">Open / download PDF</a>' : '') +
+      '</div>' : '') +
     '<div class="small">Use the PDF as the invoice reference and enter its invoice total above.</div></div>' +
     '<div class="drop">Upload Element CSV / CDV<br><input id="elementInvoiceFile" type="file" accept=".csv,.txt,.cdv"></div>' +
     '<p class="muted">Element invoice data is the source of truth for audit vehicles and charges. Amazon fleet records are not used here.</p>' +
+    '<div id="elementReconciliation">' + elementReconciliationHtml(audit) + '</div>' +
     '<div class="toolbar" style="margin-top:12px"><input id="elementInvoiceSearch" placeholder="Search Element invoice records"></div>' +
     elementInvoiceTableHtml(audit) + '</div>' +
     '<div class="panel" style="margin-top:14px"><h2>2. ELEMENT PIVOT</h2>' +
@@ -1991,13 +3089,36 @@ function element() {
     '<div class="notice">Review amounts are separate from the original Element charges and invoice total.</div>' +
     maintenanceReviewTableHtml(audit) +
     (audit && audit.unmatchedReviewRecords && audit.unmatchedReviewRecords.length ?
-      '<h3>Unmatched Review Records</h3><div class="table"><table><thead><tr><th>VIN</th><th>Client Asset ID</th><th>Description</th><th>Element Charge</th><th>Review Status</th><th>Notes</th></tr></thead><tbody>' +
+      '<h3>Unmatched Review Records</h3><div class="table"><table><thead><tr><th>VIN</th><th>Client Asset ID</th><th>Description</th><th>Element Charge</th><th>Review Status</th><th>Notes</th><th>Reason</th></tr></thead><tbody>' +
       audit.unmatchedReviewRecords.map(entry => '<tr><td>' + esc(entry.vin) + '</td><td>' + esc(entry.clientAssetId) + '</td><td>' +
-        esc(entry.maintenanceDescription) + '</td><td>' + esc(entry.elementCharge) + '</td><td>' + esc(entry.reviewStatus) + '</td><td>' + esc(entry.reviewNotes) + '</td></tr>').join('') +
+        esc(entry.maintenanceDescription) + '</td><td>' + esc(entry.elementCharge) + '</td><td>' + esc(entry.reviewStatus) + '</td><td>' + esc(entry.reviewNotes) +
+        '</td><td>' + esc(entry.conflictReason || 'No matching maintenance charge found.') + '</td></tr>').join('') +
       '</tbody></table></div>' : '') + '</div>' +
-    '<div class="panel" style="margin-top:14px"><h2>4. DELIVERABLE</h2>' +
+    '<div class="panel" style="margin-top:14px"><h2>4. TOLL REVIEW</h2>' +
+    '<div class="toolbar"><button type="button" class="btn" id="downloadTollReview">Download Toll Review</button>' +
+    '<button type="button" class="btn secondary" id="uploadCompletedTollReview">Upload Completed Toll Review</button>' +
+    '<input id="tollReviewFile" type="file" accept=".csv,.xlsx,.xls" hidden></div>' +
+    '<div class="cards"><div class="card"><div class="muted">Element Toll Billed</div><div class="num">' + formatMoney(tollSummary.billed) + '</div></div>' +
+    '<div class="card"><div class="muted">Reviewed Amount</div><div class="num">' + formatMoney(tollSummary.reviewed) + '</div></div>' +
+    '<div class="card"><div class="muted">Approved</div><div class="num">' + formatMoney(tollSummary.approved) + '</div></div>' +
+    '<div class="card"><div class="muted">Pending Review</div><div class="num">' + formatMoney(tollSummary.pending) + '</div></div>' +
+    '<div class="card"><div class="muted">Disputed</div><div class="num">' + formatMoney(tollSummary.disputed) + '</div></div>' +
+    '<div class="card"><div class="muted">Total Difference</div><div class="num">' + formatMoney(tollSummary.difference) + '</div></div></div>' +
+    '<div class="notice">Toll review values are separate from the original Element billed charges and invoice reconciliation.</div>' +
+    tollReviewTableHtml(audit) +
+    (audit && audit.unmatchedTollReviewRecords && audit.unmatchedTollReviewRecords.length ?
+      '<h3>Unmatched Toll Review Records</h3><div class="table"><table><thead><tr><th>VIN</th><th>Element Charge</th><th>Reviewed Amount</th><th>Status</th><th>Notes</th><th>Reason</th></tr></thead><tbody>' +
+      audit.unmatchedTollReviewRecords.map(row => '<tr><td>' + esc(row.vin) + '</td><td>' +
+        esc(row['Element Charge'] || row.elementCharge || '') + '</td><td>' +
+        esc(row['Reviewed Amount'] || row.reviewedAmount || '') + '</td><td>' +
+        esc(row['Review Status'] || row.reviewStatus || '') + '</td><td>' +
+        esc(row['Review Notes'] || row.reviewNotes || '') + '</td><td>' +
+        esc(row.conflictReason || 'No matching Element Ticket / Toll charge found.') + '</td></tr>').join('') +
+      '</tbody></table></div>' : '') + '</div>' +
+    '<div class="panel" style="margin-top:14px"><h2>5. DELIVERABLE</h2>' +
     (audit ? deliverableHtml(audit) : '<p class="muted">Upload Element invoice data to build the client deliverable.</p>') + '</div>' +
-    '<div class="panel" style="margin-top:14px;text-align:right"><button type="button" class="btn" id="generateClientReport">Generate Client Report</button></div>';
+    '<div class="panel" style="margin-top:14px;text-align:right"><button type="button" class="btn" id="generateClientReport">Generate Client Report</button></div>' +
+    elementAuditHistoryHtml();
   if ($('downloadMaintenanceReview')) {
     $('downloadMaintenanceReview').addEventListener('click', exportMaintenanceReviewWorkbook);
   }
@@ -2007,15 +3128,52 @@ function element() {
   if ($('maintenanceReviewFile')) {
     $('maintenanceReviewFile').addEventListener('change', event => parseMaintenanceReviewFile(event.target.files[0]));
   }
+  if ($('downloadTollReview')) {
+    $('downloadTollReview').addEventListener('click', exportTollReviewWorkbook);
+  }
+  if ($('uploadCompletedTollReview')) {
+    $('uploadCompletedTollReview').addEventListener('click', () => $('tollReviewFile').click());
+  }
+  if ($('tollReviewFile')) {
+    $('tollReviewFile').addEventListener('change', event => parseTollReviewFile(event.target.files[0]));
+  }
   if ($('elementInvoiceFile')) {
     $('elementInvoiceFile').addEventListener('change', event => parseElementInvoiceFile(event.target.files[0]));
   }
   if ($('elementInvoicePdf')) {
     $('elementInvoicePdf').addEventListener('change', event => attachElementInvoicePdf(event.target.files[0]));
   }
-  if ($('saveElementAuditDetails')) {
-    $('saveElementAuditDetails').addEventListener('click', saveElementAuditDetails);
+  if ($('saveElementAudit')) {
+    $('saveElementAudit').addEventListener('click', saveElementAuditDetails);
   }
+  if ($('startNewElementAudit')) {
+    $('startNewElementAudit').addEventListener('click', startNewElementAudit);
+  }
+  if ($('clearCurrentElementDraft')) {
+    $('clearCurrentElementDraft').addEventListener('click', clearCurrentElementDraft);
+  }
+  if ($('showElementAuditHistory')) {
+    $('showElementAuditHistory').addEventListener('click', () => {
+      const history = $('elementAuditHistory');
+      if (history) history.scrollIntoView({ behavior: 'smooth' });
+    });
+  }
+  ['elementAuditMonth', 'elementInvoiceNumber', 'elementInvoiceDate', 'elementInvoiceTotal', 'pdfMaintenanceDetailTotal']
+    .forEach(id => {
+      if ($(id)) $(id).addEventListener('change', syncElementAuditDraft);
+    });
+  if ($('exportElementAuditBackup')) {
+    $('exportElementAuditBackup').addEventListener('click', exportElementAuditBackup);
+  }
+  if ($('restoreElementAuditBackup')) {
+    $('restoreElementAuditBackup').addEventListener('click', () => $('elementAuditBackupFile').click());
+  }
+  if ($('elementAuditBackupFile')) {
+    $('elementAuditBackupFile').addEventListener('change', event => restoreElementAuditBackup(event.target.files[0]));
+  }
+  document.querySelectorAll('[data-open-element-audit]').forEach(button => {
+    button.addEventListener('click', () => changeElementAudit(button.dataset.openElementAudit));
+  });
   if ($('generateClientReport')) {
     $('generateClientReport').addEventListener('click', generateClientReport);
   }
@@ -2055,7 +3213,34 @@ function element() {
       } else if (field === 'difference') {
         row.difference = String(parseNumeric(row.reviewedAmount) - parseNumeric(row.elementCharge));
       }
-      save();
+      try {
+        save();
+      } catch (error) {
+        console.error('Unable to persist the maintenance review change.', error);
+        alert('The review change is visible in this workspace but could not be saved in browser storage. Export a backup and check available storage.');
+      }
+      element();
+    });
+  });
+  document.querySelectorAll('[data-toll-review-field]').forEach(input => {
+    input.addEventListener('change', () => {
+      const audit = currentElementAudit();
+      if (!audit) return;
+      const row = ensureTollReviewFromElement(audit)[Number(input.dataset.index)];
+      if (!row) return;
+      const field = input.dataset.tollReviewField;
+      row[field] = input.value;
+      if (field === 'reviewedAmount') {
+        row.difference = input.value === ''
+          ? ''
+          : String(roundCurrency(parseNumeric(input.value) - parseNumeric(row.elementCharge)));
+      }
+      try {
+        save();
+      } catch (error) {
+        console.error('Unable to persist the toll review change.', error);
+        alert('The toll review change is visible in this workspace but could not be saved in browser storage. Export a backup and check available storage.');
+      }
       element();
     });
   });
