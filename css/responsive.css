@@ -1,12 +1,58 @@
-/* Original compact-screen breakpoints. */
-@media(max-width:900px) {
-  .side {
-  width:185px}
-
-.cards {
-  grid-template-columns:1fr 1fr}
-
-.grid,.grid2,.formgrid {
-  grid-template-columns:1fr}
-
+/* Tables scroll inside their own frame; navigation remains reachable on phones. */
+@media (min-width: 1600px) {
+  main { padding-right: 36px; padding-left: 36px; }
+  .cards { gap: 18px; }
+}
+@media (max-width: 1150px) {
+  .side { flex-basis: 218px; width: 218px; }
+  main { margin-left: 12px; padding-right: 20px; padding-left: 20px; }
+  .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .formgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  .top { flex-wrap: wrap; gap: 12px; }
+  .top > div:last-child { flex: 1 1 100%; min-width: 0; }
+  .grid2 { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .app { display: block; }
+  .side { position: relative; top: auto; width: auto; height: auto; margin: 10px; padding: 12px; border-radius: 16px; }
+  .brand { min-height: 56px; margin: 0 0 10px; padding-bottom: 12px; }
+  .brand span { margin-top: 2px; }
+  .nav { display: flex; gap: 6px; overflow-x: auto; padding: 2px 2px 7px; }
+  .nav .section { display: none; }
+  .nav button { flex: 0 0 auto; width: auto; min-height: 42px; padding: 10px 14px; white-space: nowrap; }
+  .nav button.active::after { display: none; }
+  main { min-height: auto; margin: 10px; padding: 0 14px 24px; border-radius: 16px; }
+  .top { min-height: 0; padding: 17px 0; }
+  .top h1 { font-size: 25px; }
+  .card, .panel { padding: 16px; border-radius: 12px; }
+  .cards { gap: 10px; }
+  .cards .card { padding: 15px; }
+  .grid, .grid2, .formgrid { grid-template-columns: minmax(0, 1fr); }
+  .field.full { grid-column: auto; }
+  #content .panel:has(#downloadMaintenanceReview) .cards,
+  #content .panel:has(#downloadTollReview) .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .toolbar { gap: 9px; }
+  .toolbar > .btn { flex-grow: 1; }
+  .table { max-height: 65vh; }
+  .table th, .table td { padding: 10px 11px; }
+  .table .btn { min-height: 40px; }
+  .table input:not([type="checkbox"]), .table select { min-height: 40px; font-size: 16px; }
+  input:not([type="checkbox"]):not([type="radio"]), select, textarea { font-size: 16px; }
+  #clientSelect { font-size: 16px; }
+  .drop { padding: 18px 12px; }
+}
+@media (max-width: 380px) {
+  .cards { grid-template-columns: minmax(0, 1fr); }
+  #content .panel:has(#downloadMaintenanceReview) .cards,
+  #content .panel:has(#downloadTollReview) .cards { grid-template-columns: minmax(0, 1fr); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+@media (forced-colors: active) {
+  .nav button.active, .tabs button.active { outline: 2px solid Highlight; }
+  .card, .panel, .table, .btn { border: 1px solid CanvasText; }
 }

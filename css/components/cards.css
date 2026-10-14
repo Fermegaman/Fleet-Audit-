@@ -1,27 +1,23 @@
-/* Dashboard cards and panel grids. */
-.cards {
-  display:grid;
-  grid-template-columns:repeat(4,1fr);
-  gap:12px;
-  margin-bottom:14px}
-
-.card,.panel {
-  background:#fff;
-  border:1px solid #e3e7ee;
-  border-radius:10px;
-  padding:16px}
-
-.num {
-  font-size:27px;
-  font-weight:800;
-  margin-top:5px}
-
-.grid {
-  display:grid;
-  grid-template-columns:2fr 1fr;
-  gap:14px}
-
-.grid2 {
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:12px}
+/* Glass panels retain the workspace color without reducing text opacity. */
+.cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
+.card, .panel {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  background: var(--glass-background);
+  box-shadow: var(--glass-shadow);
+}
+.panel { margin-bottom: 18px; }
+/* Only large panels blur their backdrop; nested tiles stay crisp and lightweight. */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .panel { -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+}
+.panel > h2, .panel > h3 { padding-bottom: 14px; margin-bottom: 18px; border-bottom: 1px solid var(--glass-border); }
+.cards .card { padding: 19px; }
+.cards .muted { color: #555b62; font-size: 12px; font-weight: 650; }
+.num { margin-top: 11px; color: var(--ink); font-size: clamp(23px, 2vw, 30px); font-weight: 750; letter-spacing: -.7px; line-height: 1.25; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr); gap: 18px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.grid > .panel, .grid2 > .panel { margin-bottom: 0; }
+.panel .card { background: rgb(255 255 255 / 18%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 60%); }

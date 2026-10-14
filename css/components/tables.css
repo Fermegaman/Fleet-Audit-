@@ -1,48 +1,18 @@
-/* Scrollable tables, tabs and toolbars. */
-.toolbar {
-  display:flex;
-  gap:8px;
-  flex-wrap:wrap;
-  align-items:center;
-  margin-bottom:12px}
-
-.table {
-  overflow:auto;
-  max-height:600px;
-  border:1px solid #e3e7ee;
-  border-radius:8px}
-
-.table table {
-  border-collapse:collapse;
-  width:100%;
-  font-size:12px}
-
-.table th,.table td {
-  padding:8px;
-  border-bottom:1px solid #edf0f4;
-  text-align:left;
-  white-space:nowrap}
-
-.table th {
-  position:sticky;
-  top:0;
-  background:#f9fafb}
-
-.tabs {
-  display:flex;
-  gap:5px;
-  overflow:auto;
-  border-bottom:1px solid #e1e5eb;
-  margin-bottom:12px}
-
-.tabs button {
-  border:0;
-  background:transparent;
-  padding:9px 12px;
-  cursor:pointer;
-  color:#667085}
-
-.tabs button.active {
-  color:#2563eb;
-  border-bottom:2px solid #2563eb;
-  font-weight:700}
+/* A translucent body and opaque sticky headers balance the glass effect with legibility. */
+.table { max-width: 100%; overflow: auto; max-height: min(68vh, 740px); border: 1px solid var(--glass-border); border-radius: 12px; background: rgb(255 255 255 / 22%); box-shadow: inset 0 1px 0 rgb(255 255 255 / 70%); scrollbar-width: thin; scrollbar-color: #b69a84 #fff6ef; }
+.table table { width: 100%; border-collapse: separate; border-spacing: 0; color: var(--ink); font-size: 13px; line-height: 1.5; }
+.table th, .table td { padding: 11px 13px; border-bottom: 1px solid rgb(135 98 70 / 15%); text-align: left; white-space: nowrap; vertical-align: middle; }
+.table th { position: sticky; z-index: 1; top: 0; background: #f5e7db; color: #594333; font-size: 12px; font-weight: 700; line-height: 1.45; }
+.table td { font-variant-numeric: tabular-nums; background: transparent; }
+.table tbody tr:nth-child(even) td { background: rgb(255 255 255 / 18%); }
+.table tbody tr:hover td { background: #fff4e9; }
+.table tbody tr:last-child td { border-bottom: 0; }
+.table .btn { min-height: 32px; padding: 6px 10px; font-size: 12px; }
+.table input:not([type="checkbox"]), .table select { min-width: 120px; min-height: 36px; font-size: 13px; }
+.table textarea { min-width: 200px; font-size: 13px; }
+.tabs { display: flex; gap: 5px; margin-bottom: 17px; padding: 5px; overflow-x: auto; border: 1px solid var(--glass-border); border-radius: 11px; background: rgb(255 255 255 / 22%); }
+.tabs button { flex: 0 0 auto; min-height: 38px; padding: 8px 13px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #53585f; font-size: 13px; font-weight: 600; }
+.tabs button.active { border-color: var(--accent-border); background: #fff9f2; color: var(--accent); box-shadow: 0 1px 4px rgb(80 48 25 / 5%); }
+.tabs button:hover { background: rgb(255 255 255 / 55%); color: var(--accent); }
+.sort-header { padding: 0; border: 0; background: none; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.sort-header:hover { color: var(--accent); }

@@ -1,0 +1,16 @@
+/* Give invoice metadata a readable grouping without adding another opaque panel. */
+#content > .panel:has(#saveElementAudit) > .toolbar:first-of-type {
+  padding: 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: 11px;
+  background: rgb(255 255 255 / 20%);
+  align-items: flex-end;
+}
+#content > .panel:has(#saveElementAudit) .toolbar > .field { flex: 1 1 170px; }
+#content .panel:has(#downloadMaintenanceReview) .cards,
+#content .panel:has(#downloadTollReview) .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+#elementReconciliation { margin-top: 18px; }
+.element-source-detail td { white-space: normal; }
+.element-source-detail pre { padding: 14px; border: 1px solid var(--glass-border); border-radius: 8px; background: rgb(255 255 255 / 40%); }
+#elementAuditHistory { scroll-margin-top: 20px; }
+input[data-maintenance-review-field], input[data-toll-review-field] { background: #fffdfa; }

@@ -1,27 +1,11 @@
-/* Fleet status colors and sorting controls. */
-.fleet-row td {
-  background:#fff}
-
-.fleet-row.grounded td {
-  background:#fee2e2}
-
-.fleet-row.inactive td {
-  background:#f3f4f6}
-
-.fleet-row.absent td {
-  background:#fff7ed;
-  color:#7c2d12}
-
-.sort-header {
-  padding:0;
-  border:0;
-  background:transparent;
-  color:inherit;
-  font:inherit;
-  font-weight:700;
-  cursor:pointer}
-
-.sort-header:focus-visible {
-  outline:2px solid #2563eb;
-  outline-offset:2px;
-  border-radius:3px}
+/* Fleet statuses keep their meaning across stripes, hover and transparency. */
+.table .fleet-row td { background: transparent; }
+.table .fleet-row:nth-child(even) td { background: rgb(255 255 255 / 18%); }
+.table .fleet-row.grounded td { background: #ffefeb; color: #743b33; }
+.table .fleet-row.grounded td:first-child { box-shadow: inset 3px 0 #bc5443; }
+.table .fleet-row.inactive td { background: #eeefef; color: #595e64; }
+.table .fleet-row.absent td { background: #fff1d8; color: #74501d; }
+.table .fleet-row:hover td { background: #fff4e9; }
+.table .fleet-row.grounded:hover td { background: #ffe4dc; }
+.table .fleet-row.inactive:hover td { background: #e1e4e5; }
+.table .fleet-row.absent:hover td { background: #ffe8bc; }

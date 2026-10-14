@@ -1,0 +1,7 @@
+/* Keep metric tiles translucent; color accents provide hierarchy without hiding the background. */
+#content > .cards:first-child .card { position: relative; border-top: 3px solid #d08a58; }
+#content > .cards:first-child .card:first-child { border-top-color: var(--accent); }
+#content > .cards:first-child .card:nth-child(2) { border-top-color: #bd735a; }
+#content > .cards:first-child .card:nth-child(3) { border-top-color: #b18c54; }
+#content > .cards:first-child .card:nth-child(4) { border-top-color: #8c8875; }
+#content > .grid { margin-bottom: 18px; }

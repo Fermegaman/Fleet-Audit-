@@ -1,0 +1,29 @@
+/* Shared palette and dimensions. Keep readable foregrounds separate from decorative accents. */
+:root {
+  color-scheme: light;
+  --accent: #ad420e;
+  --accent-hover: #8f3309;
+  --accent-bright: #ed7835;
+  --accent-soft: #fff0e5;
+  --accent-border: #e6c6af;
+  --ink: #292d33;
+  --muted: #5d6269;
+  --canvas: #f1efec;
+  --surface: #fff;
+  --subtle: #faf7f3;
+  --line: #e3d8cf;
+  --line-strong: #b8a79a;
+  --success: #24633f;
+  --success-soft: #eff8f1;
+  --danger: #a5362c;
+  --danger-soft: #fff0ed;
+  --radius: 16px;
+  --control-radius: 9px;
+  --shadow: 0 3px 12px rgb(70 44 25 / 4%);
+  --focus: 0 0 0 3px rgb(173 66 14 / 18%);
+  --rail-background: linear-gradient(90deg, #eee8e2 0%, #f3e4d7 50%, #f8dfca 100%);
+  --workspace-background: radial-gradient(ellipse at center, #ffead8 0%, #fff3e9 55%, #fffaf6 100%);
+  --glass-background: rgb(255 255 255 / 30%);
+  --glass-border: rgb(146 103 72 / 20%);
+  --glass-shadow: inset 0 1px 0 rgb(255 255 255 / 80%), 0 4px 14px rgb(80 48 25 / 4%);
+}

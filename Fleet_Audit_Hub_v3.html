@@ -1,48 +1,272 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Fleet Audit Hub v3</title>
-<link rel="stylesheet" href="css/legacy/prototype.css">
-</head>
-<body>
-<div class="app">
-<aside class="side"><div class="brand">Fleet Audit Hub<span>Centralized fleet operations</span></div>
-<div class="nav">
-<div class="section">Workspace</div>
-<button data-view="dashboard">▦ Dashboard</button>
-<button data-view="clients">👥 Clients</button>
-<button data-view="fleet">🚐 Fleet & Grounded</button>
-<button data-view="rentals">🚚 Rentals</button>
-<button data-view="maintenance">🔧 PM / Maintenance</button>
-<button data-view="invoices">🧾 Invoice Audits</button>
-<button data-view="fif">💵 FIF</button>
-<button data-view="tolls">🛣 Toll Claims</button>
-<button data-view="pave">✓ PAVE</button>
-<button data-view="recalls">↻ Recalls</button>
-<div class="section">Audit</div>
-<button data-view="element">Element Audit</button>
-<button data-view="leaseplan">LeasePlan / Wheels</button>
-<button data-view="actions">⚠ Open Actions</button>
-<button data-view="legacy">▤ Original Data</button>
-</div></aside>
-<main>
-<div class="top"><div><h1 id="title">Dashboard</h1><div id="subtitle" class="muted">Your AGPL workbook, organized into one application.</div></div>
-<div><div class="small">Client</div><select id="clientSelect"><option value="AGPL">AGPL — Angell Parcel & Logistics</option></select></div></div>
-<div id="content"></div>
-</main></div>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<script src="data/workbook.js"></script>
-<script src="js/legacy/core.js"></script>
-<script src="js/legacy/dashboard.js"></script>
-<script src="js/legacy/clients.js"></script>
-<script src="js/legacy/fleet.js"></script>
-<script src="js/legacy/trackers.js"></script>
-<script src="js/legacy/actions.js"></script>
-<script src="js/legacy/invoices.js"></script>
-<script src="js/legacy/element.js"></script>
-<script src="js/legacy/leaseplan.js"></script>
-<script src="js/legacy/original-data.js"></script>
-<script src="js/legacy/bootstrap.js"></script>
-</body></html>
+  <title>Fleet Audit Hub</title>
+
+  <link rel="stylesheet" href="css/app.css">
+
+  <style>
+    /* Align integrated SVG icons with their navigation labels. */
+    .nav button {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav button > span {
+      min-width: 0;
+    }
+
+    /* Icons follow the button color, including its active state. */
+    .nav-icon {
+      display: block;
+      flex: 0 0 19px;
+      width: 19px;
+      height: 19px;
+
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.75;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+
+      transform-origin: center;
+      transition: transform 180ms ease;
+    }
+
+    .nav button:hover .nav-icon,
+    .nav button:focus-visible .nav-icon {
+      transform: translateY(-1px) scale(1.06);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .nav-icon {
+        transition: none;
+      }
+
+      .nav button:hover .nav-icon,
+      .nav button:focus-visible .nav-icon {
+        transform: none;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+    <aside class="side" aria-label="Workspace sidebar">
+      <div class="brand">
+        Fleet Audit Hub
+        <span>Centralized fleet operations</span>
+      </div>
+
+      <nav class="nav" aria-label="Main navigation">
+        <div class="section">Workspace</div>
+
+        <button type="button" data-view="dashboard">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <rect x="3" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="3" width="7" height="7" rx="1.5"/>
+            <rect x="3" y="14" width="7" height="7" rx="1.5"/>
+            <rect x="14" y="14" width="7" height="7" rx="1.5"/>
+          </svg>
+          <span>Dashboard</span>
+        </button>
+
+        <button type="button" data-view="clients">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <circle cx="9" cy="8" r="3"/>
+            <path d="M3 21v-2a6 6 0 0 1 12 0v2"/>
+            <path d="M16 5a3 3 0 0 1 0 6m2 4a5 5 0 0 1 3 4v2"/>
+          </svg>
+          <span>Clients</span>
+        </button>
+
+        <button type="button" data-view="fleet">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <path d="M3 17V7a2 2 0 0 1 2-2h10l6 6v6"/>
+            <path d="M3 17h2m4 0h6m4 0h2M14 5v7h7"/>
+            <circle cx="7" cy="17" r="2"/>
+            <circle cx="17" cy="17" r="2"/>
+          </svg>
+          <span>Fleet &amp; Grounded</span>
+        </button>
+
+        <button type="button" data-view="rentals">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <circle cx="7.5" cy="8.5" r="4.5"/>
+            <path d="m11 12 9 9h2v-4h-3v-3h-3"/>
+            <circle cx="6.5" cy="7.5" r=".5"/>
+          </svg>
+          <span>Rentals</span>
+        </button>
+
+        <button type="button" data-view="maintenance">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <path d="M14 6a6 6 0 0 0-7 7l-4 4a2.8 2.8 0 0 0 4 4l4-4a6 6 0 0 0 7-7l-4 4-4-4 4-4Z"/>
+          </svg>
+          <span>PM / Maintenance</span>
+        </button>
+
+        <button type="button" data-view="invoices">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/>
+            <path d="M9 7h6M9 11h6M9 15h3"/>
+          </svg>
+          <span>Invoice Audits</span>
+        </button>
+
+        <button type="button" data-view="fif">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <rect x="3" y="5" width="18" height="14" rx="2"/>
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M6 9h.01M18 15h.01"/>
+          </svg>
+          <span>FIF</span>
+        </button>
+
+        <button type="button" data-view="tolls">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <path d="M5 21 8 3m11 18L16 3M12 3v3m0 4v4m0 4v3"/>
+          </svg>
+          <span>Toll Claims</span>
+        </button>
+
+        <button type="button" data-view="pave">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z"/>
+            <path d="m8 12 3 3 5-6"/>
+          </svg>
+          <span>PAVE</span>
+        </button>
+
+        <button type="button" data-view="recalls">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <path d="m10.3 4-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3l-8-14a2 2 0 0 0-3.4 0Z"/>
+            <path d="M12 9v4m0 4h.01"/>
+          </svg>
+          <span>Recalls</span>
+        </button>
+
+        <div class="section">Audit</div>
+
+        <button type="button" data-view="element">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <path d="M14 3H5v18h14V8l-5-5Z"/>
+            <path d="M14 3v5h5M8 12h8m-8 4h5"/>
+          </svg>
+          <span>Element Audit</span>
+        </button>
+
+        <button type="button" data-view="leaseplan">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <path d="M7 3h10v4H7z"/>
+            <path d="M7 5H4v16h16V5h-3M8 12h8m-8 4h5"/>
+          </svg>
+          <span>LeasePlan / Wheels</span>
+        </button>
+
+        <button type="button" data-view="actions">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="9"/>
+            <path d="M12 7v5l3 2"/>
+          </svg>
+          <span>Open Actions</span>
+        </button>
+
+        <button type="button" data-view="legacy">
+          <svg class="nav-icon" viewBox="0 0 24 24"
+               aria-hidden="true" focusable="false">
+            <ellipse cx="12" cy="5" rx="8" ry="3"/>
+            <path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/>
+          </svg>
+          <span>Original Data</span>
+        </button>
+      </nav>
+    </aside>
+
+    <main>
+      <header class="top">
+        <div>
+          <h1 id="title">Dashboard</h1>
+          <div id="subtitle" class="muted">
+            Your fleet operations, organized in one workspace.
+          </div>
+        </div>
+
+        <div>
+          <label class="small" for="clientSelect">Client</label>
+          <select id="clientSelect">
+            <option>Loading clients…</option>
+          </select>
+        </div>
+      </header>
+
+      <div id="content"></div>
+    </main>
+  </div>
+
+  <!-- Local spreadsheet library and original workbook data. -->
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="data/workbook.js"></script>
+
+  <!-- Shared configuration, workspace state and helpers. -->
+  <script src="js/core/config.js"></script>
+  <script src="js/core/state.js"></script>
+  <script src="js/shared/values.js"></script>
+  <script src="js/core/migrations.js"></script>
+  <script src="js/core/selectors.js"></script>
+  <script src="js/shared/ui.js"></script>
+  <script src="js/shared/csv.js"></script>
+
+  <!-- Fleet operations and general workspace pages. -->
+  <script src="js/features/fleet/table.js"></script>
+  <script src="js/features/dashboard.js"></script>
+  <script src="js/features/clients.js"></script>
+  <script src="js/features/fleet/page.js"></script>
+  <script src="js/features/fleet/import.js"></script>
+  <script src="js/features/fleet/editor.js"></script>
+  <script src="js/features/trackers.js"></script>
+  <script src="js/features/actions.js"></script>
+  <script src="js/features/invoices.js"></script>
+
+  <!-- Element invoice audit modules. -->
+  <script src="js/features/element/review-model.js"></script>
+  <script src="js/features/element/audit-model.js"></script>
+  <script src="js/features/element/source.js"></script>
+  <script src="js/features/element/tables.js"></script>
+  <script src="js/features/element/review-export.js"></script>
+  <script src="js/features/element/toll-import.js"></script>
+  <script src="js/features/element/maintenance-import.js"></script>
+  <script src="js/features/element/invoice-import.js"></script>
+  <script src="js/features/element/drafts.js"></script>
+  <script src="js/features/element/history.js"></script>
+  <script src="js/features/element/backup.js"></script>
+  <script src="js/features/element/reports.js"></script>
+  <script src="js/features/element/page.js"></script>
+
+  <!-- Additional pages and navigation. -->
+  <script src="js/features/leaseplan.js"></script>
+  <script src="js/features/original-data.js"></script>
+  <script src="js/core/navigation.js"></script>
+
+  <!-- Start only after all module definitions are available. -->
+  <script src="js/bootstrap.js"></script>
+</body>
+</html>

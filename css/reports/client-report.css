@@ -1,53 +1,29 @@
-/* Standalone invoice report and print layout. */
-body {
-  font:14px Arial,sans-serif;
-  color:#172033;
-  margin:32px}
-
-h1,h2,h3 {
-  color:#111827}
-
-table {
-  border-collapse:collapse;
-  width:100%;
-  margin:10px 0 22px}
-
-th,td {
-  border:1px solid #d8dee8;
-  padding:7px;
-  text-align:left}
-
-th {
-  background:#f3f4f6}
-
-.toolbar {
-  margin-bottom:20px}
-
-.btn {
-  padding:9px 14px;
-  background:#2563eb;
-  color:white;
-  border:0;
-  border-radius:5px;
-  cursor:pointer}
-
-.summary {
-  display:grid;
-  grid-template-columns:repeat(4,1fr);
-  gap:10px}
-
-.card {
-  border:1px solid #d8dee8;
-  padding:12px}
-
-.muted {
-  color:#667085}
-
+/* The separate report keeps a solid paper surface for reading and printing. */
+@import url("../theme.css");
+* { box-sizing: border-box; }
+body { max-width: 1280px; margin: 32px auto; padding: 0 28px; background: #fff; color: var(--ink); font: 14px/1.65 system-ui, "Segoe UI", sans-serif; }
+h1 { margin: 26px 0 14px; padding-bottom: 15px; border-bottom: 3px solid var(--accent-bright); font-size: 28px; letter-spacing: -.6px; }
+h2 { margin: 30px 0 12px; color: var(--accent); font-size: 19px; }
+h3 { font-size: 16px; }
+table { width: 100%; margin: 12px 0 22px; border-collapse: collapse; font-size: 12px; overflow-wrap: anywhere; }
+th, td { padding: 9px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { background: #f5e7db; color: #594333; font-weight: 700; }
+.summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.card { min-width: 0; padding: 15px; border: 1px solid var(--line); border-top: 3px solid var(--accent-bright); border-radius: 8px; overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+.notice { padding: 14px; border: 1px solid var(--accent-border); background: #fff3e7; color: #754323; }
+.toolbar { margin-bottom: 20px; }
+.btn { padding: 11px 17px; border: 1px solid var(--accent); border-radius: 9px; background: var(--accent); color: #fff; font: inherit; font-weight: 650; cursor: pointer; }
+.btn:focus-visible { outline: 2px solid var(--accent-hover); outline-offset: 3px; }
+@media (max-width: 650px) { body { margin: 18px auto; padding: 0 12px; } .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } table { font-size: 12px; } th, td { padding: 5px; } }
+@page { margin: 12mm; }
 @media print {
-  .toolbar {
-  display:none}
-
-body {
-  margin:10mm}
-
+  body { max-width: none; margin: 0; padding: 0; font-size: 10pt; }
+  .toolbar { display: none; }
+  h1 { font-size: 22pt; }
+  h2, h3 { break-after: avoid; }
+  tr, .card { break-inside: avoid; }
+  thead { display: table-header-group; }
+  .summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  table { font-size: 8.5pt; }
 }
