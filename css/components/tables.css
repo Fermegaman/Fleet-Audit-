@@ -1,0 +1,48 @@
+/* Scrollable tables, tabs and toolbars. */
+.toolbar {
+  display:flex;
+  gap:8px;
+  flex-wrap:wrap;
+  align-items:center;
+  margin-bottom:12px}
+
+.table {
+  overflow:auto;
+  max-height:600px;
+  border:1px solid #e3e7ee;
+  border-radius:8px}
+
+.table table {
+  border-collapse:collapse;
+  width:100%;
+  font-size:12px}
+
+.table th,.table td {
+  padding:8px;
+  border-bottom:1px solid #edf0f4;
+  text-align:left;
+  white-space:nowrap}
+
+.table th {
+  position:sticky;
+  top:0;
+  background:#f9fafb}
+
+.tabs {
+  display:flex;
+  gap:5px;
+  overflow:auto;
+  border-bottom:1px solid #e1e5eb;
+  margin-bottom:12px}
+
+.tabs button {
+  border:0;
+  background:transparent;
+  padding:9px 12px;
+  cursor:pointer;
+  color:#667085}
+
+.tabs button.active {
+  color:#2563eb;
+  border-bottom:2px solid #2563eb;
+  font-weight:700}

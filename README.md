@@ -1,39 +1,36 @@
 # Fleet Audit Hub
 
-Centralized fleet operations and audit application.
+Fleet operations and invoice audits, organized into focused browser modules.
 
-## Current structure
+## Run
 
-- `index.html` — application shell and page markup
-- `css/app.css` — application styling
-- `js/app.js` — application behavior and current prototype data
-- `README.md` — project notes
+Extract the entire ZIP and open **index.html**. No package installation or build step is required. You can also use Live Server or serve this folder with `python3 -m http.server 8000` and open `http://localhost:8000`.
 
-## Development
+Keep `css/`, `js/`, `data/` and `vendor/` next to the HTML files. To keep using an existing browser workspace, replace files at the same hosted origin. Browser storage is tied to the origin; opening a different URL or local path may show a different workspace. The existing audit backup export/restore remains available.
 
-Open the project in GitHub Codespaces and use Live Server to run `index.html`.
+## Project layout
 
-This foundation split preserves the existing Fleet Audit Hub prototype while separating the HTML, CSS, and JavaScript so multiple developers can work on the application more easily.
+- `index.html`: maintained app shell and explicit script load order.
+- `js/core/`: configuration, state, migrations, selectors and navigation.
+- `js/shared/`: CSV parsing, value formatting and reusable rendering helpers.
+- `js/features/`: dashboard, clients, fleet, trackers, actions and invoice workflows.
+- `js/features/element/`: invoice imports, charge calculations, drafts, review imports/exports, history, backups, tables and reports.
+- `js/bootstrap.js`: migrations and application startup.
+- `css/`: base/layout styles, components, fleet styles, responsive rules and printable report styles.
+- `data/workbook.js`: unchanged source workbook data.
+- `vendor/`: unchanged local SheetJS build and license.
+- `js/legacy/`, `css/legacy/`: separate historical prototype, opened through `Fleet_Audit_Hub_v3.html`.
+- `docs/`: module map, existing workflow notes and verification scope.
+- `tests/`: comparison harness for the original and reorganized versions.
 
-## Client and fleet data
+See [the module guide](docs/MODULES.md) for responsibilities, shared dependencies and startup order. See [workflow notes](docs/WORKFLOWS.md) for existing business rules.
 
-- Clients have stable IDs and are selected from the application header.
-- Fleet records are stored separately by client ID in browser storage. Amazon CSV fields and fleet-team grounding fields are kept separately on each vehicle.
-- The existing AGPL workbook is retained as the original-data archive and is migrated into AGPL's fleet records by VIN the first time the app loads.
-- Use **Upload Amazon Fleet** on Fleet & Grounded to import `.csv`, `.xlsx`, or `.xls` exports. Excel files are parsed with the bundled local SheetJS browser build, and all formats use the same VIN reconciliation while preserving fleet-team fields and grounding history.
-- Amazon `status` determines active fleet membership; current totals and the Fleet Records and Grounded Vehicles tables include only `ACTIVE` vehicles. Inactive records remain stored for history. `operationalStatus` independently determines grounding and row color.
-- Active vehicles reported as grounded appear automatically in Grounded Vehicles. Use **View/Edit** to update Fleet Team details; Amazon status transitions record grounding and return dates without removing the vehicle's manual information or history.
-- Fleet tables can be sorted by each data column; Amazon-grounded rows are highlighted in light red.
-- Browser `localStorage` is a prototype persistence adapter; the client-ID-keyed state is intended to be replaceable by a shared database.
+## Verification
 
-## Element invoice audit
+With Node.js installed, compare this project against an extracted copy of the original ZIP:
 
-- Element audits are scoped by client and audit month, with invoice number and date retained on the saved record. The active workspace is stored separately from saved Audit History. Use **Save Audit** to add or update its stable audit record and **Audit History** to reopen saved work.
-- Use **Archive & Start New Month** to save the current month and switch to an empty workspace; each client can have only one saved audit per month. **Clear Current Draft** requires confirmation and never deletes a saved audit. Invoice date is required before a draft can be saved to history.
-- Enter the actual invoice total from the Element PDF; it is not inferred from CSV charges. Reconciliation reports the calculated CSV total, invoice total, difference, and status. PDF maintenance detail totals can be entered separately to verify source variances without changing billed charges.
-- For the supplied AGPL October 2026 source, the CSV maintenance category is $792.19 while the previously extracted PDF detail lines total $845.73, a $53.54 source variance. The UI flags this for verification; neither value replaces the original CSV maintenance charges.
-- Element CSV/CDV rows are the source for invoice records, VIN-level pivot totals, charge categories, maintenance review, the deliverable, and the printable client report. This workflow does not compare against or read Amazon fleet records.
-- Original Element maintenance charges remain unchanged. Completed maintenance reviews update only review amount, calculated difference, review status, and notes; unmatched VIN/charge rows remain visible under Unmatched Review Records.
-- Toll Review is a separate workflow populated only from Element charges categorized as Ticket / Toll. It stores reviewed amounts, differences, statuses, and notes independently, with separate workbook download/upload; toll decisions do not change invoice calculations or maintenance review data.
-- The client report is generated in the browser and can be printed or saved as PDF.
-- Audit history and active workspaces are stored only in this browser's `localStorage`; they are not shared with teammates or synced across computers. Export the Element Audit Backup regularly and restore it on another browser to transfer saved audits. Only attached PDFs whose contents were successfully stored are included; CSV-derived rows and source filenames are retained, not necessarily the original CSV file.
+```sh
+node tests/regression.cjs /absolute/path/to/original/Fleet-Audit--main
+```
+
+The harness uses Node's built-in VM and a minimal DOM stub; it does not install dependencies or replace browser testing. See [verification scope](docs/VERIFICATION.md).

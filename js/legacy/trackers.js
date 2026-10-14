@@ -1,0 +1,7 @@
+/** Historical workbook tracker pages. */
+function rentals(){setTitle('Rentals','Centralized rental tracker.');$('content').innerHTML='<div class="panel"><div class="toolbar"><button class="btn" onclick="alert(\'Rental entry form is ready for the database build.\')">+ Add rental</button></div>'+tbl(data('Rental Tracker'))+'</div>'}
+function maintenance(){setTitle('PM / Maintenance','Preventative maintenance and repair tracking.');$('content').innerHTML='<div class="panel"><div class="toolbar"><button class="btn" onclick="alert(\'PM entry form is ready for the database build.\')">+ Add PM item</button></div>'+tbl(data('PMS'))+'</div>'}
+function fif(){setTitle('FIF','Fleet Improvement Fund tracking.');$('content').innerHTML='<div class="panel"><div class="toolbar"><button class="btn" onclick="alert(\'FIF entry form is ready for the database build.\')">+ Add claim</button></div>'+tbl(data('FIF Tracker'))+'</div>'}
+function tolls(){setTitle('Toll Claims','Expected, approved and resolved toll reimbursement.');$('content').innerHTML='<div class="panel"><div class="toolbar"><button class="btn" onclick="alert(\'Toll entry form is ready for the database build.\')">+ Add claim</button></div>'+tbl(data('Toll Tracker'))+'</div>'}
+function pave(){setTitle('PAVE','Inspection due-date tracking.');$('content').innerHTML='<div class="panel">'+tbl(data('Pave'))+'</div>'}
+function recalls(){setTitle('Recalls','Recall status.');$('content').innerHTML='<div class="panel">'+tbl(data('Recalls'))+'</div>'}

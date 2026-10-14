@@ -1,0 +1,12 @@
+/* Original compact-screen breakpoints. */
+@media(max-width:900px) {
+  .side {
+  width:185px}
+
+.cards {
+  grid-template-columns:1fr 1fr}
+
+.grid,.grid2,.formgrid {
+  grid-template-columns:1fr}
+
+}

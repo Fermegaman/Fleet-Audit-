@@ -1,0 +1,53 @@
+/* Standalone invoice report and print layout. */
+body {
+  font:14px Arial,sans-serif;
+  color:#172033;
+  margin:32px}
+
+h1,h2,h3 {
+  color:#111827}
+
+table {
+  border-collapse:collapse;
+  width:100%;
+  margin:10px 0 22px}
+
+th,td {
+  border:1px solid #d8dee8;
+  padding:7px;
+  text-align:left}
+
+th {
+  background:#f3f4f6}
+
+.toolbar {
+  margin-bottom:20px}
+
+.btn {
+  padding:9px 14px;
+  background:#2563eb;
+  color:white;
+  border:0;
+  border-radius:5px;
+  cursor:pointer}
+
+.summary {
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:10px}
+
+.card {
+  border:1px solid #d8dee8;
+  padding:12px}
+
+.muted {
+  color:#667085}
+
+@media print {
+  .toolbar {
+  display:none}
+
+body {
+  margin:10mm}
+
+}

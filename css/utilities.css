@@ -1,0 +1,27 @@
+/* Replaces fixed inline layout styles. Important preserves their original precedence. */
+[data-layout="space-bottom-12"] {
+  margin-bottom:12px !important;
+}
+
+[data-layout="space-top-10"] {
+  margin-top:10px !important;
+}
+
+[data-layout="space-top-12"] {
+  margin-top:12px !important;
+}
+
+[data-layout="space-top-14"] {
+  margin-top:14px !important;
+}
+
+[data-layout="actions-right"] {
+  margin-top:14px !important;
+  text-align:right !important;
+}
+
+[data-layout="source-details"] {
+  white-space:pre-wrap !important;
+  margin:0 !important;
+}
+

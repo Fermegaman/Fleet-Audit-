@@ -1,0 +1,38 @@
+/* Notices, empty states and small status labels. */
+.drop {
+  border:2px dashed #cbd5e1;
+  border-radius:9px;
+  padding:22px;
+  text-align:center;
+  background:#f8fafc}
+
+.notice {
+  background:#eff6ff;
+  color:#1e40af;
+  padding:11px 12px;
+  border-radius:8px;
+  margin:10px 0;
+  font-size:13px}
+
+.check label {
+  display:block;
+  padding:8px;
+  border-bottom:1px solid #edf0f4}
+
+.empty {
+  text-align:center;
+  padding:30px;
+  color:#667085}
+
+
+.small {
+  font-size:11px;
+  color:#667085}
+
+.pill {
+  display:inline-block;
+  padding:3px 7px;
+  border-radius:20px;
+  font-size:11px;
+  background:#dcfce7;
+  color:#166534}

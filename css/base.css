@@ -1,0 +1,9 @@
+/* Page defaults. */
+* {
+  box-sizing:border-box}
+
+body {
+  margin:0;
+  font-family:Segoe UI,Arial,sans-serif;
+  background:#f5f7fb;
+  color:#172033}

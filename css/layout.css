@@ -1,0 +1,67 @@
+/* Sidebar, navigation and page heading. */
+.app {
+  display:flex;
+  min-height:100vh}
+
+.side {
+  width:235px;
+  background:#111827;
+  color:#fff;
+  padding:16px;
+  flex:none}
+
+.brand {
+  font-size:20px;
+  font-weight:800;
+  padding:8px 8px 18px}
+
+.brand span {
+  display:block;
+  color:#9ca3af;
+  font-size:11px;
+  font-weight:400;
+  margin-top:4px}
+
+
+.nav button {
+  display:block;
+  width:100%;
+  margin:3px 0;
+  padding:10px 11px;
+  border:0;
+  border-radius:7px;
+  background:transparent;
+  color:#d1d5db;
+  text-align:left;
+  cursor:pointer}
+
+.nav button:hover,.nav button.active {
+  background:#273449;
+  color:#fff}
+
+.section {
+  font-size:10px;
+  text-transform:uppercase;
+  color:#6b7280;
+  padding:14px 8px 5px}
+
+
+main {
+  flex:1;
+  padding:25px;
+  min-width:0}
+
+.top {
+  display:flex;
+  justify-content:space-between;
+  gap:20px;
+  align-items:center;
+  margin-bottom:18px}
+
+.top h1 {
+  margin:0;
+  font-size:25px}
+
+.muted {
+  color:#667085;
+  font-size:13px}

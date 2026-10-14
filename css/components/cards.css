@@ -1,0 +1,27 @@
+/* Dashboard cards and panel grids. */
+.cards {
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:12px;
+  margin-bottom:14px}
+
+.card,.panel {
+  background:#fff;
+  border:1px solid #e3e7ee;
+  border-radius:10px;
+  padding:16px}
+
+.num {
+  font-size:27px;
+  font-weight:800;
+  margin-top:5px}
+
+.grid {
+  display:grid;
+  grid-template-columns:2fr 1fr;
+  gap:14px}
+
+.grid2 {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px}

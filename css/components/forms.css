@@ -1,0 +1,41 @@
+/* Inputs, buttons and form grids. */
+select,input,textarea {
+  font:inherit;
+  border:1px solid #d8dee8;
+  border-radius:7px;
+  padding:8px 10px;
+  background:white}
+
+.btn {
+  padding:9px 13px;
+  border:0;
+  border-radius:7px;
+  background:#2563eb;
+  color:#fff;
+  cursor:pointer}
+
+.btn.secondary {
+  background:#fff;
+  color:#172033;
+  border:1px solid #d8dee8}
+
+.btn.danger {
+  background:#dc2626}
+
+
+.formgrid {
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:10px}
+
+.field label {
+  display:block;
+  font-size:11px;
+  color:#667085;
+  margin-bottom:4px}
+
+.field input,.field textarea,.field select {
+  width:100%}
+
+.field.full {
+  grid-column:1/-1}
