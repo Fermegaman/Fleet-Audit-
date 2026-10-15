@@ -1,0 +1,247 @@
+/* Navigation dimensions and animation settings. */
+.app[data-sidebar] {
+  --rail-width: 240px;
+  --rail-duration: 200ms;
+  --rail-easing: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+/* Animate the rail width; the flexible workspace fills the remaining space. */
+.app[data-sidebar] .side {
+  flex-basis: var(--rail-width);
+  width: var(--rail-width);
+  padding: 14px 12px 20px;
+  overflow-x: hidden;
+
+  transition:
+    width var(--rail-duration) var(--rail-easing),
+    flex-basis var(--rail-duration) var(--rail-easing);
+}
+
+/* Hamburger button and its caption. */
+.sidebar-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  margin-bottom: 15px;
+}
+
+.sidebar-toggle {
+  display: grid;
+  place-items: center;
+
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  padding: 8px;
+
+  border: 1px solid rgba(135, 87, 53, 0.28);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.36);
+  color: var(--ink);
+
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.sidebar-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.sidebar-toggle svg,
+.nav-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-caption {
+  color: #65564a;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  white-space: nowrap;
+}
+
+/* Keep icon positions consistent while labels appear or disappear. */
+.app[data-sidebar] .nav {
+  display: grid;
+  gap: 6px;
+}
+
+.app[data-sidebar] .nav button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+
+  min-height: 42px;
+  padding: 10px 11px;
+}
+
+.nav-icon {
+  flex: 0 0 20px;
+  transition: transform 160ms ease;
+}
+
+.nav button:hover .nav-icon,
+.nav button:focus-visible .nav-icon {
+  transform: translateY(-1px);
+}
+
+.app[data-sidebar] .nav button > span,
+.sidebar-caption {
+  min-width: 0;
+  max-width: 175px;
+  overflow: hidden;
+  opacity: 1;
+  white-space: nowrap;
+
+  transition:
+    max-width var(--rail-duration) var(--rail-easing),
+    opacity 120ms ease;
+}
+
+/* The existing logo and title disappear together in compact mode. */
+.app[data-sidebar] .brand {
+  max-height: 100px;
+  overflow: hidden;
+
+  transition:
+    opacity 120ms ease,
+    max-height var(--rail-duration) var(--rail-easing),
+    margin var(--rail-duration) var(--rail-easing),
+    padding var(--rail-duration) var(--rail-easing);
+}
+
+/* Compact navigation. */
+.app[data-sidebar="collapsed"] {
+  --rail-width: 76px;
+}
+
+.app[data-sidebar="collapsed"] .sidebar-tools {
+  justify-content: center;
+  gap: 0;
+}
+
+.app[data-sidebar="collapsed"] .sidebar-caption,
+.app[data-sidebar="collapsed"] .nav button > span {
+  max-width: 0;
+  opacity: 0;
+}
+
+.app[data-sidebar="collapsed"] .brand {
+  min-height: 0;
+  max-height: 0;
+  margin: 0;
+  padding: 0;
+
+  border: 0;
+  opacity: 0;
+}
+
+.app[data-sidebar="collapsed"] .nav button {
+  justify-content: center;
+  gap: 0;
+  padding: 10px 0;
+}
+
+.app[data-sidebar="collapsed"] .nav button.active::after {
+  display: none;
+}
+
+/* Replace section titles with small separators. */
+.app[data-sidebar="collapsed"] .section {
+  display: block;
+  overflow: hidden;
+
+  height: 12px;
+  margin: 3px 7px;
+  padding: 0;
+
+  border-top: 1px solid rgba(135, 87, 53, 0.2);
+  font-size: 0;
+}
+
+/* Slightly narrower expanded rail on smaller desktop screens. */
+@media (min-width: 761px) and (max-width: 1150px) {
+  .app[data-sidebar="expanded"] {
+    --rail-width: 218px;
+  }
+
+  .app[data-sidebar="expanded"] .nav button {
+    gap: 8px;
+    font-size: 12px;
+  }
+}
+
+/* Phone layout: expanded navigation above, compact navigation beside. */
+@media (max-width: 760px) {
+  .app[data-sidebar="expanded"] .side {
+    width: auto;
+  }
+
+  .app[data-sidebar="expanded"] .nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .app[data-sidebar="expanded"] .nav .section {
+    display: block;
+    grid-column: 1 / -1;
+  }
+
+  .app[data-sidebar="expanded"] .nav button {
+    width: 100%;
+    gap: 8px;
+    font-size: 12px;
+  }
+
+  .app[data-sidebar="expanded"] .nav button > span {
+    white-space: normal;
+  }
+
+  .app[data-sidebar="collapsed"] {
+    display: flex;
+  }
+
+  .app[data-sidebar="collapsed"] .side {
+    position: sticky;
+    top: 10px;
+
+    height: calc(100vh - 20px);
+    height: calc(100dvh - 20px);
+    margin-right: 0;
+  }
+
+  .app[data-sidebar="collapsed"] main {
+    margin-left: 8px;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+}
+
+/* Respect reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce) {
+  .app[data-sidebar] .side,
+  .app[data-sidebar] .brand,
+  .app[data-sidebar] .nav button > span,
+  .sidebar-caption,
+  .nav-icon {
+    transition: none;
+  }
+
+  .nav button:hover .nav-icon,
+  .nav button:focus-visible .nav-icon {
+    transform: none;
+  }
+}

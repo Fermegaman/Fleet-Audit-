@@ -7,200 +7,313 @@
   <title>Fleet Audit Hub</title>
 
   <link rel="stylesheet" href="css/app.css">
-
-  <style>
-    /* Align integrated SVG icons with their navigation labels. */
-    .nav button {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .nav button > span {
-      min-width: 0;
-    }
-
-    /* Icons follow the button color, including its active state. */
-    .nav-icon {
-      display: block;
-      flex: 0 0 19px;
-      width: 19px;
-      height: 19px;
-
-      fill: none;
-      stroke: currentColor;
-      stroke-width: 1.75;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-
-      transform-origin: center;
-      transition: transform 180ms ease;
-    }
-
-    .nav button:hover .nav-icon,
-    .nav button:focus-visible .nav-icon {
-      transform: translateY(-1px) scale(1.06);
-    }
-
-    @media (prefers-reduced-motion: reduce) {
-      .nav-icon {
-        transition: none;
-      }
-
-      .nav button:hover .nav-icon,
-      .nav button:focus-visible .nav-icon {
-        transform: none;
-      }
-    }
-  </style>
+  <link rel="stylesheet" href="css/components/sidebar.css">
 </head>
 
 <body>
   <div class="app">
     <aside class="side" aria-label="Workspace sidebar">
+
+      <!-- Toggle between compact and expanded navigation. -->
+      <div class="sidebar-tools">
+        <button
+          type="button"
+          id="sidebarToggle"
+          class="sidebar-toggle"
+          aria-controls="primaryNavigation"
+          aria-expanded="true"
+          aria-label="Collapse navigation"
+          title="Collapse navigation"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M4 6h16M4 12h16M4 18h16"/>
+          </svg>
+        </button>
+
+        <span class="sidebar-caption" aria-hidden="true">
+          Navigation
+        </span>
+      </div>
+
+      <!-- The embedded brand image is defined in layout.css. -->
       <div class="brand">
         Fleet Audit Hub
         <span>Centralized fleet operations</span>
       </div>
 
-      <nav class="nav" aria-label="Main navigation">
+      <nav
+        class="nav"
+        id="primaryNavigation"
+        aria-label="Main navigation"
+      >
         <div class="section">Workspace</div>
 
-        <button type="button" data-view="dashboard">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="dashboard"
+          aria-label="Dashboard"
+          title="Dashboard"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <rect x="3" y="3" width="7" height="7" rx="1.5"/>
             <rect x="14" y="3" width="7" height="7" rx="1.5"/>
             <rect x="3" y="14" width="7" height="7" rx="1.5"/>
             <rect x="14" y="14" width="7" height="7" rx="1.5"/>
           </svg>
-          <span>Dashboard</span>
+          <span class="nav-label">Dashboard</span>
         </button>
 
-        <button type="button" data-view="clients">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="clients"
+          aria-label="Clients"
+          title="Clients"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <circle cx="9" cy="8" r="3"/>
             <path d="M3 21v-2a6 6 0 0 1 12 0v2"/>
             <path d="M16 5a3 3 0 0 1 0 6m2 4a5 5 0 0 1 3 4v2"/>
           </svg>
-          <span>Clients</span>
+          <span class="nav-label">Clients</span>
         </button>
 
-        <button type="button" data-view="fleet">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="fleet"
+          aria-label="Fleet &amp; Grounded"
+          title="Fleet &amp; Grounded"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <path d="M3 17V7a2 2 0 0 1 2-2h10l6 6v6"/>
             <path d="M3 17h2m4 0h6m4 0h2M14 5v7h7"/>
             <circle cx="7" cy="17" r="2"/>
             <circle cx="17" cy="17" r="2"/>
           </svg>
-          <span>Fleet &amp; Grounded</span>
+          <span class="nav-label">Fleet &amp; Grounded</span>
         </button>
 
-        <button type="button" data-view="rentals">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="rentals"
+          aria-label="Rentals"
+          title="Rentals"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <circle cx="7.5" cy="8.5" r="4.5"/>
             <path d="m11 12 9 9h2v-4h-3v-3h-3"/>
             <circle cx="6.5" cy="7.5" r=".5"/>
           </svg>
-          <span>Rentals</span>
+          <span class="nav-label">Rentals</span>
         </button>
 
-        <button type="button" data-view="maintenance">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="maintenance"
+          aria-label="PM / Maintenance"
+          title="PM / Maintenance"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <path d="M14 6a6 6 0 0 0-7 7l-4 4a2.8 2.8 0 0 0 4 4l4-4a6 6 0 0 0 7-7l-4 4-4-4 4-4Z"/>
           </svg>
-          <span>PM / Maintenance</span>
+          <span class="nav-label">PM / Maintenance</span>
         </button>
 
-        <button type="button" data-view="invoices">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="invoices"
+          aria-label="Invoice Audits"
+          title="Invoice Audits"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <path d="M6 3h12v18l-3-2-3 2-3-2-3 2V3Z"/>
             <path d="M9 7h6M9 11h6M9 15h3"/>
           </svg>
-          <span>Invoice Audits</span>
+          <span class="nav-label">Invoice Audits</span>
         </button>
 
-        <button type="button" data-view="fif">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="fif"
+          aria-label="FIF"
+          title="FIF"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <rect x="3" y="5" width="18" height="14" rx="2"/>
             <circle cx="12" cy="12" r="3"/>
             <path d="M6 9h.01M18 15h.01"/>
           </svg>
-          <span>FIF</span>
+          <span class="nav-label">FIF</span>
         </button>
 
-        <button type="button" data-view="tolls">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="tolls"
+          aria-label="Toll Claims"
+          title="Toll Claims"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <path d="M5 21 8 3m11 18L16 3M12 3v3m0 4v4m0 4v3"/>
           </svg>
-          <span>Toll Claims</span>
+          <span class="nav-label">Toll Claims</span>
         </button>
 
-        <button type="button" data-view="pave">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="pave"
+          aria-label="PAVE"
+          title="PAVE"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z"/>
             <path d="m8 12 3 3 5-6"/>
           </svg>
-          <span>PAVE</span>
+          <span class="nav-label">PAVE</span>
         </button>
 
-        <button type="button" data-view="recalls">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="recalls"
+          aria-label="Recalls"
+          title="Recalls"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <path d="m10.3 4-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3l-8-14a2 2 0 0 0-3.4 0Z"/>
             <path d="M12 9v4m0 4h.01"/>
           </svg>
-          <span>Recalls</span>
+          <span class="nav-label">Recalls</span>
         </button>
 
         <div class="section">Audit</div>
 
-        <button type="button" data-view="element">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="element"
+          aria-label="Element Audit"
+          title="Element Audit"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <path d="M14 3H5v18h14V8l-5-5Z"/>
             <path d="M14 3v5h5M8 12h8m-8 4h5"/>
           </svg>
-          <span>Element Audit</span>
+          <span class="nav-label">Element Audit</span>
         </button>
 
-        <button type="button" data-view="leaseplan">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="leaseplan"
+          aria-label="LeasePlan / Wheels"
+          title="LeasePlan / Wheels"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <path d="M7 3h10v4H7z"/>
             <path d="M7 5H4v16h16V5h-3M8 12h8m-8 4h5"/>
           </svg>
-          <span>LeasePlan / Wheels</span>
+          <span class="nav-label">LeasePlan / Wheels</span>
         </button>
 
-        <button type="button" data-view="actions">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="actions"
+          aria-label="Open Actions"
+          title="Open Actions"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <circle cx="12" cy="12" r="9"/>
             <path d="M12 7v5l3 2"/>
           </svg>
-          <span>Open Actions</span>
+          <span class="nav-label">Open Actions</span>
         </button>
 
-        <button type="button" data-view="legacy">
-          <svg class="nav-icon" viewBox="0 0 24 24"
-               aria-hidden="true" focusable="false">
+        <button
+          type="button"
+          data-view="legacy"
+          aria-label="Original Data"
+          title="Original Data"
+        >
+          <svg
+            class="nav-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
             <ellipse cx="12" cy="5" rx="8" ry="3"/>
             <path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/>
           </svg>
-          <span>Original Data</span>
+          <span class="nav-label">Original Data</span>
         </button>
       </nav>
     </aside>
 
+    <!-- The workspace automatically fills the available width. -->
     <main>
       <header class="top">
         <div>
@@ -226,7 +339,7 @@
   <script src="vendor/xlsx.full.min.js"></script>
   <script src="data/workbook.js"></script>
 
-  <!-- Shared configuration, workspace state and helpers. -->
+  <!-- Configuration, workspace state and shared helpers. -->
   <script src="js/core/config.js"></script>
   <script src="js/core/state.js"></script>
   <script src="js/shared/values.js"></script>
@@ -261,12 +374,13 @@
   <script src="js/features/element/reports.js"></script>
   <script src="js/features/element/page.js"></script>
 
-  <!-- Additional pages and navigation. -->
+  <!-- Additional pages and navigation controls. -->
   <script src="js/features/leaseplan.js"></script>
   <script src="js/features/original-data.js"></script>
   <script src="js/core/navigation.js"></script>
+  <script src="js/core/sidebar.js"></script>
 
-  <!-- Start only after all module definitions are available. -->
+  <!-- Start the application after all definitions are loaded. -->
   <script src="js/bootstrap.js"></script>
 </body>
 </html>
